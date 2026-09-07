@@ -74,24 +74,40 @@ jobs:
             console.log(`REAL_TRANSCRIPT_UNAVAILABLE: ${data.error}`);
           }
           NODE
-      - name: Verify AI generation does not fake success without a server key
+      - name: Generate real local drafts from the recovered transcript
         run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const transcript=JSON.parse(fs.readFileSync('/tmp/transcript.json','utf8'));
+          if(!transcript.ok) throw new Error('This vertical test needs the real transcript recovered in the preceding step.');
+          fs.writeFileSync('/tmp/generation-request.json',JSON.stringify({
+            projectName:'CI vertical loop',
+            universe:'Oiseau enquêteur',
+            character:'Bec',
+            references:[],
+            transcript:transcript.text
+          }));
+          NODE
           STATUS=$(curl --silent --show-error \
             -o /tmp/generation.json \
             -w '%{http_code}' \
             -X POST http://127.0.0.1:3000/api/generate-scripts \
             -H 'content-type: application/json' \
-            --data '{"projectName":"CI truth check","transcript":"Ceci est une transcription de contrôle réellement fournie au test. Elle sert uniquement à vérifier le comportement du serveur sans clé externe."}')
+            --data-binary @/tmp/generation-request.json)
           echo "HTTP $STATUS"
           cat /tmp/generation.json
           STATUS="$STATUS" node - <<'NODE'
           const fs=require('fs');
           const data=JSON.parse(fs.readFileSync('/tmp/generation.json','utf8'));
           const status=Number(process.env.STATUS);
-          if(status!==503||data.ok!==false||data.code!=='AI_NOT_CONFIGURED'){
-            throw new Error('Generation must explicitly report an unconfigured external AI provider in CI');
+          if(status!==200||!data.ok) throw new Error(`Local generation failed with HTTP ${status}: ${data.error||'unknown error'}`);
+          if(data.generationMode!=='fallback'||data.provider!=='local-extractive') throw new Error('Local generation must be explicitly labelled as fallback/extractive');
+          if(!Array.isArray(data.scripts)||data.scripts.length<3) throw new Error('Expected at least three real draft artifacts');
+          for(const script of data.scripts){
+            if(!script.script||!script.hook||!Array.isArray(script.sourceFacts)||script.sourceFacts.length<1) throw new Error('Draft is missing content or source traceability');
           }
-          console.log('AI provider absence is reported honestly; no script is fabricated.');
+          if(!data.limitations) throw new Error('Fallback limitations must be explicit');
+          console.log(`LOCAL_DRAFTS_OK count=${data.scripts.length} model=${data.model}`);
           NODE
       - name: Show server log on failure
         if: failure()
