@@ -17,6 +17,21 @@ jobs:
         run: npm install
       - name: Build
         run: npm run build
+      - name: Verify validated scripts survive regeneration
+        run: |
+          node --input-type=module - <<'NODE'
+          import {mergeGeneratedScripts} from './lib/script-state.mjs';
+          const validated={id:'validated-1',title:'Choix humain',script:'Ce texte a été validé.',status:'validated',validatedAt:'2026-09-08T00:00:00.000Z'};
+          const oldProposal={id:'old-proposal',title:'Ancienne proposition',script:'À remplacer',status:'proposed'};
+          const generated=[{title:'Nouvelle proposition',script:'Nouveau brouillon',hook:'Hook',sourceFacts:['fait']}];
+          const generation={generatedAt:'2026-09-08T00:01:00.000Z',model:'local-extractive-v1',provider:'local-extractive',generationMode:'fallback',originality:'extractive-draft',limitations:'Test'};
+          const merged=mergeGeneratedScripts([validated,oldProposal],generated,generation,()=> 'new-proposal');
+          if(merged.length!==2) throw new Error(`Expected validated + new proposal, got ${merged.length}`);
+          if(merged[0].id!==validated.id||merged[0].script!==validated.script||merged[0].status!=='validated'||merged[0].validatedAt!==validated.validatedAt) throw new Error('Validated script was altered during regeneration');
+          if(merged.some(script=>script.id==='old-proposal')) throw new Error('Old unvalidated proposal survived regeneration');
+          if(merged[1].id!=='new-proposal'||merged[1].status!=='proposed'||merged[1].generationMode!=='fallback') throw new Error('New generated proposal metadata is incorrect');
+          console.log('VALIDATED_SCRIPT_PRESERVED');
+          NODE
       - name: Start production server
         run: |
           npm start > /tmp/maketik.log 2>&1 &
