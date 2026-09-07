@@ -310,3 +310,84 @@ Questions permanentes :
 - Qu’est-ce qui est préférable ?
 - Qu’est-ce qui est réellement vérifié ?
 - Quelle est la prochaine action utile sans casser ce qui fonctionne ?
+
+## 17. MISE À JOUR DE REPRISE — état réel au 2026-09-08
+
+> **Cette section supersède les instructions Vercel et les états de CI plus haut lorsque ceux-ci sont contradictoires.** L’historique précédent est conservé volontairement, mais il ne faut pas revenir à Vercel.
+
+### Décision d’environnement
+
+L’utilisateur a explicitement décidé : **ne pas utiliser Vercel**. Ne pas tenter de reconnecter, créer ou déployer sur Vercel. Le travail se fait directement dans GitHub. GitHub Actions sert d’environnement d’exécution et de vérification éphémère : il compile l’application, lance réellement `next start` et exerce les routes HTTP. Il n’existe pas à ce stade d’URL publique persistante de Maketik, et il ne faut pas prétendre le contraire.
+
+### CI réellement verte
+
+La panne initiale de CI venait de `actions/setup-node` configuré avec `cache: npm` sans lockfile. Le cache a été retiré. Le workflow principal `.github/workflows/ci.yml` est désormais une vérification verticale réelle et a passé avec succès sur `main` :
+- `npm install` ;
+- `npm run build` ;
+- démarrage production avec `npm start` ;
+- chargement de `/` ;
+- test de transcription YouTube réelle ;
+- test du fallback factuel manuel ;
+- génération de brouillons locaux ;
+- test explicite de conservation d’un script validé lors d’une régénération.
+
+### Transcription YouTube — vérité observée
+
+La route `app/api/transcribe-youtube/route.js` obtient réellement une transcription quand les captions sont accessibles : le test CI de référence a récupéré **487 mots** avec le provider `youtube-captions` sur une vraie URL YouTube.
+
+En revanche, plusieurs sources factuelles publiques testées depuis les runners GitHub — TED-Ed, NASA et 3Blue1Brown — ont fourni leurs métadonnées mais ont renvoyé une indisponibilité de captions via `youtube-transcript`. Le produit doit donc continuer à distinguer :
+- métadonnée YouTube vérifiée ;
+- transcription automatique réellement obtenue ;
+- transcription automatique indisponible ;
+- texte fourni manuellement.
+
+Le fallback manuel est une branche produit normale et honnête, pas un faux succès automatique.
+
+### Génération sans secret externe
+
+GitHub Models ne doit pas être utilisé : le service a été retiré en 2026. La route `app/api/generate-scripts/route.js` garde OpenAI comme fournisseur optionnel si une clé serveur est un jour configurée, mais Maketik ne dépend plus d’une clé pour traverser la boucle de base.
+
+Sans `OPENAI_API_KEY`, la route produit un **fallback local extractif** :
+- `provider: local-extractive` ;
+- `model: local-extractive-v1` ;
+- `generationMode: fallback` ;
+- `originality: extractive-draft` ;
+- limites explicitement exposées.
+
+Ces sorties sont des **brouillons extractifs traçables**, pas des scripts IA originaux. L’interface le dit explicitement. Les segments source sont bornés et les brouillons restent dans une fenêtre de durée courte. Ne jamais requalifier ce fallback en génération éditoriale équivalente à une IA.
+
+### Validation humaine protégée et testée
+
+La règle de fusion des scripts est isolée dans `lib/script-state.mjs` et utilisée réellement par `app/page.js`. La CI vérifie qu’une régénération :
+- conserve l’ID, le texte, le statut et la date d’un script `validated` ;
+- supprime les anciennes propositions non validées ;
+- ajoute les nouvelles propositions comme `proposed`.
+
+Cette garantie est maintenant testée, pas seulement supposée à la lecture du code.
+
+### PDF validé réellement exportable
+
+Un export PDF réel a été ajouté :
+- dépendance `pdf-lib` 1.17.1 ;
+- route `app/api/export-script-pdf/route.js` ;
+- bouton de téléchargement dans `app/page.js` uniquement pour un script `validated` ;
+- une proposition non validée reçoit un refus HTTP `409` ;
+- un script validé produit une réponse binaire `application/pdf` avec `Content-Disposition: attachment`.
+
+Le workflow séparé `.github/workflows/pdf-export.yml` construit l’application, démarre le serveur, vérifie le refus d’un script non validé puis vérifie un **vrai fichier PDF** par son type MIME, sa signature `%PDF-` et une taille non triviale. Ce workflow a passé avec succès.
+
+### Boucle désormais réellement couverte
+
+La tranche actuellement fermée est :
+
+`source YouTube réelle → métadonnée vérifiée → transcription automatique réelle quand disponible OU fallback manuel explicite → génération locale extractive sans faux statut IA → plusieurs brouillons → validation → régénération sans écraser la validation → PDF réel du script validé`
+
+Cette boucle est volontairement moins ambitieuse qu’un pipeline IA complet, mais elle existe réellement et ses états sont vérifiables.
+
+### Prochaine action produit
+
+Après le PDF, la prochaine amélioration qui rapproche le plus d’un paquet prêt pour CapCut est **un véritable fichier audio exportable pour un script validé**. L’aperçu Web Speech actuel ne compte pas comme audio produit.
+
+Pour la voix : chercher et tester une voix française masculine naturelle, gratuite ou quasi gratuite ; vérifier maintenance actuelle, licence/conditions, export de fichier, stabilité et comportement réel depuis GitHub. Le fournisseur doit rester interchangeable et son indisponibilité ne doit jamais effacer le script validé ni bloquer l’export PDF.
+
+Ensuite seulement : transcription TikTok plus robuste, puis bible visuelle/personnage canonique et pipeline d’illustrations cohérentes.
