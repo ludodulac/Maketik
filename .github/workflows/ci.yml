@@ -33,12 +33,12 @@ jobs:
         run: |
           grep -q "MAKE" /tmp/home.html
           echo "Homepage served by the production Next.js server."
-      - name: Verify a real YouTube source
+      - name: Verify a real factual YouTube source
         run: |
           curl --silent --show-error \
             -X POST http://127.0.0.1:3000/api/inspect-source \
             -H 'content-type: application/json' \
-            --data '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}' \
+            --data '{"url":"https://www.youtube.com/watch?v=aircAruvnKk"}' \
             > /tmp/inspect.json
           cat /tmp/inspect.json
           node - <<'NODE'
@@ -48,40 +48,34 @@ jobs:
           if(data.kind!=='youtube') throw new Error('Source was not classified as YouTube');
           if(!data.sourceId||!data.title) throw new Error('Verified YouTube metadata is incomplete');
           if(data.transcript?.status!=='unavailable') throw new Error('Source inspection must not pretend that metadata is a transcript');
-          console.log(`Verified real YouTube metadata: ${data.title}`);
+          console.log(`Verified real factual YouTube metadata: ${data.title}`);
           NODE
-      - name: Exercise real YouTube transcription or honest fallback
+      - name: Recover real YouTube transcript
         run: |
           STATUS=$(curl --silent --show-error \
             -o /tmp/transcript.json \
             -w '%{http_code}' \
             -X POST http://127.0.0.1:3000/api/transcribe-youtube \
             -H 'content-type: application/json' \
-            --data '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}')
+            --data '{"url":"https://www.youtube.com/watch?v=aircAruvnKk"}')
           echo "HTTP $STATUS"
           cat /tmp/transcript.json
           STATUS="$STATUS" node - <<'NODE'
           const fs=require('fs');
           const data=JSON.parse(fs.readFileSync('/tmp/transcript.json','utf8'));
           const status=Number(process.env.STATUS);
-          if(data.ok){
-            if(status!==200) throw new Error(`Successful transcription returned HTTP ${status}`);
-            if(!data.text||!data.wordCount||!data.provider) throw new Error('Transcription success is missing its real artifact/provenance');
-            console.log(`REAL_TRANSCRIPT_OK words=${data.wordCount} provider=${data.provider}`);
-          }else{
-            if(status!==422) throw new Error(`Unavailable transcription returned unexpected HTTP ${status}`);
-            if(!data.error||!data.fallback) throw new Error('Transcription failure is not explicit/actionable');
-            console.log(`REAL_TRANSCRIPT_UNAVAILABLE: ${data.error}`);
-          }
+          if(status!==200||!data.ok) throw new Error(`The factual vertical test needs a real transcript; HTTP ${status}: ${data.error||'unknown error'}`);
+          if(!data.text||!data.wordCount||!data.provider) throw new Error('Transcription success is missing its real artifact/provenance');
+          if(data.wordCount<200) throw new Error(`Transcript is unexpectedly short: ${data.wordCount} words`);
+          console.log(`REAL_TRANSCRIPT_OK words=${data.wordCount} provider=${data.provider}`);
           NODE
-      - name: Generate real local drafts from the recovered transcript
+      - name: Generate bounded local drafts from the recovered transcript
         run: |
           node - <<'NODE'
           const fs=require('fs');
           const transcript=JSON.parse(fs.readFileSync('/tmp/transcript.json','utf8'));
-          if(!transcript.ok) throw new Error('This vertical test needs the real transcript recovered in the preceding step.');
           fs.writeFileSync('/tmp/generation-request.json',JSON.stringify({
-            projectName:'CI vertical loop',
+            projectName:'CI factual vertical loop',
             universe:'Oiseau enquêteur',
             character:'Bec',
             references:[],
@@ -104,7 +98,11 @@ jobs:
           if(data.generationMode!=='fallback'||data.provider!=='local-extractive') throw new Error('Local generation must be explicitly labelled as fallback/extractive');
           if(!Array.isArray(data.scripts)||data.scripts.length<3) throw new Error('Expected at least three real draft artifacts');
           for(const script of data.scripts){
-            if(!script.script||!script.hook||!Array.isArray(script.sourceFacts)||script.sourceFacts.length<1) throw new Error('Draft is missing content or source traceability');
+            if(!script.script||!script.hook||!Array.isArray(script.sourceFacts)||script.sourceFacts.length<6) throw new Error('Draft is missing content or source traceability');
+            if(script.estimatedSeconds<35||script.estimatedSeconds>75) throw new Error(`Draft duration outside bounded fallback range: ${script.estimatedSeconds}s`);
+            for(const fact of script.sourceFacts){
+              if(fact.split(/\s+/).filter(Boolean).length>28) throw new Error('A source fact chunk is too large to be a usable traceability unit');
+            }
           }
           if(!data.limitations) throw new Error('Fallback limitations must be explicit');
           console.log(`LOCAL_DRAFTS_OK count=${data.scripts.length} model=${data.model}`);
