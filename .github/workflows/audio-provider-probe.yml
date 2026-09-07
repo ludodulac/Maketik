@@ -1,33 +1,75 @@
-name: Probe Maketik French audio provider
+name: Verify Maketik French audio export
 
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
+      - 'app/api/export-script-audio/**'
+      - 'app/page.js'
+      - 'package.json'
       - '.github/workflows/audio-provider-probe.yml'
 
 jobs:
-  edge-tts-probe:
+  audio-export:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install isolated Edge TTS probe
-        run: npm install --no-save --ignore-scripts node-edge-tts@1.2.10
-      - name: Produce a real French male MP3
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Start production server
         run: |
-          npx node-edge-tts \
-            -t "Maketik transforme une source réelle en un script validé, puis produit un fichier audio prêt à être utilisé dans le montage." \
-            -f /tmp/maketik-henri.mp3 \
-            -v fr-FR-HenriNeural \
-            -l fr-FR \
-            -o audio-24khz-96kbitrate-mono-mp3 \
-            --timeout 20000
-          test -s /tmp/maketik-henri.mp3
-          test "$(wc -c < /tmp/maketik-henri.mp3)" -gt 5000
-          file /tmp/maketik-henri.mp3
-          file /tmp/maketik-henri.mp3 | grep -qi 'audio\|mpeg\|mp3'
-          echo "EDGE_TTS_MP3_OK bytes=$(wc -c < /tmp/maketik-henri.mp3) voice=fr-FR-HenriNeural"
+          npm start > /tmp/maketik-audio.log 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/maketik-audio.log
+          exit 1
+      - name: Reject audio export for an unvalidated proposal
+        run: |
+          STATUS=$(curl --silent --show-error \
+            -o /tmp/audio-rejected.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/export-script-audio \
+            -H 'content-type: application/json' \
+            --data '{"projectName":"CI Audio","script":{"status":"proposed","title":"Non validé","script":"Ne doit pas produire de fichier audio."}}')
+          test "$STATUS" = "409"
+          node - <<'NODE'
+          const fs=require('fs');
+          const data=JSON.parse(fs.readFileSync('/tmp/audio-rejected.json','utf8'));
+          if(data.ok!==false||!data.error) throw new Error('Unvalidated audio rejection is not explicit');
+          console.log('UNVALIDATED_AUDIO_REJECTED');
+          NODE
+      - name: Export a validated script as a real French MP3
+        run: |
+          cat > /tmp/audio-request.json <<'JSON'
+          {"projectName":"CI Audio","script":{"status":"validated","validatedAt":"2026-09-08T00:00:00.000Z","title":"Une histoire courte","script":"Maketik transforme une source réelle en un script validé, puis produit un fichier audio français prêt à être utilisé dans le montage. Ce fichier doit exister réellement avant que l’application annonce un export réussi."}}
+          JSON
+          STATUS=$(curl --silent --show-error \
+            -D /tmp/audio-headers.txt \
+            -o /tmp/script.mp3 \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/export-script-audio \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/audio-request.json)
+          test "$STATUS" = "200"
+          grep -qi '^content-type: audio/mpeg' /tmp/audio-headers.txt
+          grep -qi '^content-disposition: attachment;' /tmp/audio-headers.txt
+          grep -qi '^x-maketik-audio-provider: edge-read-aloud-experimental' /tmp/audio-headers.txt
+          grep -qi '^x-maketik-audio-voice: fr-FR-HenriNeural' /tmp/audio-headers.txt
+          grep -qi '^x-maketik-audio-stability: experimental' /tmp/audio-headers.txt
+          test "$(wc -c < /tmp/script.mp3)" -gt 5000
+          file /tmp/script.mp3 | grep -qi 'audio\|mpeg\|mp3'
+          echo "VALIDATED_AUDIO_MP3_OK bytes=$(wc -c < /tmp/script.mp3) provider=edge-read-aloud-experimental voice=fr-FR-HenriNeural"
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik-audio.log || true
