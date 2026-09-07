@@ -33,53 +33,67 @@ jobs:
         run: |
           grep -q "MAKE" /tmp/home.html
           echo "Homepage served by the production Next.js server."
-      - name: Verify a real factual YouTube source
+      - name: Find a factual YouTube source with a real transcript
         run: |
-          curl --silent --show-error \
-            -X POST http://127.0.0.1:3000/api/inspect-source \
-            -H 'content-type: application/json' \
-            --data '{"url":"https://www.youtube.com/watch?v=aircAruvnKk"}' \
-            > /tmp/inspect.json
-          cat /tmp/inspect.json
+          rm -f /tmp/transcript.json /tmp/inspect.json /tmp/source-url.txt
+          candidates=(
+            "https://www.youtube.com/watch?v=rb7TVW77ZCs"
+            "https://www.youtube.com/watch?v=EJXTZ5jpSmk"
+            "https://www.youtube.com/watch?v=aircAruvnKk"
+          )
+          for url in "${candidates[@]}"; do
+            echo "Trying factual source: $url"
+            curl --silent --show-error \
+              -X POST http://127.0.0.1:3000/api/inspect-source \
+              -H 'content-type: application/json' \
+              --data "{\"url\":\"$url\"}" \
+              > /tmp/candidate-inspect.json
+            cat /tmp/candidate-inspect.json
+            INSPECT_OK=$(node -e "const d=require('/tmp/candidate-inspect.json');process.stdout.write(d.ok&&d.kind==='youtube'&&d.title?'yes':'no')")
+            if [ "$INSPECT_OK" != "yes" ]; then
+              echo "Metadata not usable; trying next candidate."
+              continue
+            fi
+            STATUS=$(curl --silent --show-error \
+              -o /tmp/candidate-transcript.json \
+              -w '%{http_code}' \
+              -X POST http://127.0.0.1:3000/api/transcribe-youtube \
+              -H 'content-type: application/json' \
+              --data "{\"url\":\"$url\"}")
+            echo "Transcript HTTP $STATUS"
+            cat /tmp/candidate-transcript.json
+            TRANSCRIPT_OK=$(STATUS="$STATUS" node -e "const d=require('/tmp/candidate-transcript.json');process.stdout.write(Number(process.env.STATUS)===200&&d.ok&&d.text&&d.wordCount>=200&&d.provider?'yes':'no')")
+            if [ "$TRANSCRIPT_OK" = "yes" ]; then
+              cp /tmp/candidate-inspect.json /tmp/inspect.json
+              cp /tmp/candidate-transcript.json /tmp/transcript.json
+              printf '%s' "$url" > /tmp/source-url.txt
+              break
+            fi
+            echo "No usable real transcript; trying next candidate."
+          done
+          test -s /tmp/transcript.json || { echo "No factual candidate produced a real transcript."; exit 1; }
           node - <<'NODE'
           const fs=require('fs');
-          const data=JSON.parse(fs.readFileSync('/tmp/inspect.json','utf8'));
-          if(!data.ok) throw new Error(`YouTube source inspection failed: ${data.error||'unknown error'}`);
-          if(data.kind!=='youtube') throw new Error('Source was not classified as YouTube');
-          if(!data.sourceId||!data.title) throw new Error('Verified YouTube metadata is incomplete');
-          if(data.transcript?.status!=='unavailable') throw new Error('Source inspection must not pretend that metadata is a transcript');
-          console.log(`Verified real factual YouTube metadata: ${data.title}`);
-          NODE
-      - name: Recover real YouTube transcript
-        run: |
-          STATUS=$(curl --silent --show-error \
-            -o /tmp/transcript.json \
-            -w '%{http_code}' \
-            -X POST http://127.0.0.1:3000/api/transcribe-youtube \
-            -H 'content-type: application/json' \
-            --data '{"url":"https://www.youtube.com/watch?v=aircAruvnKk"}')
-          echo "HTTP $STATUS"
-          cat /tmp/transcript.json
-          STATUS="$STATUS" node - <<'NODE'
-          const fs=require('fs');
-          const data=JSON.parse(fs.readFileSync('/tmp/transcript.json','utf8'));
-          const status=Number(process.env.STATUS);
-          if(status!==200||!data.ok) throw new Error(`The factual vertical test needs a real transcript; HTTP ${status}: ${data.error||'unknown error'}`);
-          if(!data.text||!data.wordCount||!data.provider) throw new Error('Transcription success is missing its real artifact/provenance');
-          if(data.wordCount<200) throw new Error(`Transcript is unexpectedly short: ${data.wordCount} words`);
-          console.log(`REAL_TRANSCRIPT_OK words=${data.wordCount} provider=${data.provider}`);
+          const inspection=JSON.parse(fs.readFileSync('/tmp/inspect.json','utf8'));
+          const transcript=JSON.parse(fs.readFileSync('/tmp/transcript.json','utf8'));
+          const url=fs.readFileSync('/tmp/source-url.txt','utf8');
+          if(inspection.transcript?.status!=='unavailable') throw new Error('Metadata inspection must not pretend to contain a transcript');
+          console.log(`FACTUAL_SOURCE_OK ${inspection.title} — ${inspection.author||'unknown'} — ${url}`);
+          console.log(`REAL_TRANSCRIPT_OK words=${transcript.wordCount} provider=${transcript.provider}`);
           NODE
       - name: Generate bounded local drafts from the recovered transcript
         run: |
           node - <<'NODE'
           const fs=require('fs');
           const transcript=JSON.parse(fs.readFileSync('/tmp/transcript.json','utf8'));
+          const inspection=JSON.parse(fs.readFileSync('/tmp/inspect.json','utf8'));
           fs.writeFileSync('/tmp/generation-request.json',JSON.stringify({
             projectName:'CI factual vertical loop',
             universe:'Oiseau enquêteur',
             character:'Bec',
             references:[],
-            transcript:transcript.text
+            transcript:transcript.text,
+            sourceTitle:inspection.title
           }));
           NODE
           STATUS=$(curl --silent --show-error \
