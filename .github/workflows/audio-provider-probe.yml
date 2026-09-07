@@ -1,0 +1,33 @@
+name: Probe Maketik French audio provider
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/audio-provider-probe.yml'
+
+jobs:
+  edge-tts-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install isolated Edge TTS probe
+        run: npm install --no-save --ignore-scripts node-edge-tts@1.2.10
+      - name: Produce a real French male MP3
+        run: |
+          npx node-edge-tts \
+            -t "Maketik transforme une source réelle en un script validé, puis produit un fichier audio prêt à être utilisé dans le montage." \
+            -f /tmp/maketik-henri.mp3 \
+            -v fr-FR-HenriNeural \
+            -l fr-FR \
+            -o audio-24khz-96kbitrate-mono-mp3 \
+            --timeout 20000
+          test -s /tmp/maketik-henri.mp3
+          test "$(wc -c < /tmp/maketik-henri.mp3)" -gt 5000
+          file /tmp/maketik-henri.mp3
+          file /tmp/maketik-henri.mp3 | grep -qi 'audio\|mpeg\|mp3'
+          echo "EDGE_TTS_MP3_OK bytes=$(wc -c < /tmp/maketik-henri.mp3) voice=fr-FR-HenriNeural"
