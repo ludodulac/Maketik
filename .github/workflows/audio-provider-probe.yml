@@ -36,7 +36,7 @@ jobs:
           exit 1
       - name: Reject audio export for an unvalidated proposal
         run: |
-          STATUS=$(curl --silent --show-error \
+          STATUS=$(curl --silent --show-error --max-time 10 \
             -o /tmp/audio-rejected.json \
             -w '%{http_code}' \
             -X POST http://127.0.0.1:3000/api/export-script-audio \
@@ -49,27 +49,49 @@ jobs:
           if(data.ok!==false||!data.error) throw new Error('Unvalidated audio rejection is not explicit');
           console.log('UNVALIDATED_AUDIO_REJECTED');
           NODE
-      - name: Export a validated script as a real French MP3
+      - name: Export a validated script as a real French MP3 or fail explicitly
         run: |
           cat > /tmp/audio-request.json <<'JSON'
           {"projectName":"CI Audio","script":{"status":"validated","validatedAt":"2026-09-08T00:00:00.000Z","title":"Une histoire courte","script":"Maketik transforme une source réelle en un script validé, puis produit un fichier audio français prêt à être utilisé dans le montage. Ce fichier doit exister réellement avant que l’application annonce un export réussi."}}
           JSON
-          STATUS=$(curl --silent --show-error \
+          set +e
+          STATUS=$(curl --silent --show-error --max-time 35 \
             -D /tmp/audio-headers.txt \
-            -o /tmp/script.mp3 \
+            -o /tmp/audio-response.bin \
             -w '%{http_code}' \
             -X POST http://127.0.0.1:3000/api/export-script-audio \
             -H 'content-type: application/json' \
             --data-binary @/tmp/audio-request.json)
-          test "$STATUS" = "200"
-          grep -qi '^content-type: audio/mpeg' /tmp/audio-headers.txt
-          grep -qi '^content-disposition: attachment;' /tmp/audio-headers.txt
-          grep -qi '^x-maketik-audio-provider: edge-read-aloud-experimental' /tmp/audio-headers.txt
-          grep -qi '^x-maketik-audio-voice: fr-FR-HenriNeural' /tmp/audio-headers.txt
-          grep -qi '^x-maketik-audio-stability: experimental' /tmp/audio-headers.txt
-          test "$(wc -c < /tmp/script.mp3)" -gt 5000
-          file /tmp/script.mp3 | grep -qi 'audio\|mpeg\|mp3'
-          echo "VALIDATED_AUDIO_MP3_OK bytes=$(wc -c < /tmp/script.mp3) provider=edge-read-aloud-experimental voice=fr-FR-HenriNeural"
+          CURL_EXIT=$?
+          set -e
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "Audio route exceeded the bounded request time."
+            exit 1
+          fi
+          if [ "$STATUS" = "200" ]; then
+            mv /tmp/audio-response.bin /tmp/script.mp3
+            grep -qi '^content-type: audio/mpeg' /tmp/audio-headers.txt
+            grep -qi '^content-disposition: attachment;' /tmp/audio-headers.txt
+            grep -qi '^x-maketik-audio-provider: edge-read-aloud-experimental' /tmp/audio-headers.txt
+            grep -qi '^x-maketik-audio-voice: fr-FR-HenriNeural' /tmp/audio-headers.txt
+            grep -qi '^x-maketik-audio-stability: experimental' /tmp/audio-headers.txt
+            test "$(wc -c < /tmp/script.mp3)" -gt 5000
+            file /tmp/script.mp3 | grep -qi 'audio\|mpeg\|mp3'
+            echo "VALIDATED_AUDIO_MP3_OK bytes=$(wc -c < /tmp/script.mp3) provider=edge-read-aloud-experimental voice=fr-FR-HenriNeural"
+          elif [ "$STATUS" = "502" ]; then
+            mv /tmp/audio-response.bin /tmp/audio-error.json
+            node - <<'NODE'
+            const fs=require('fs');
+            const data=JSON.parse(fs.readFileSync('/tmp/audio-error.json','utf8'));
+            if(data.ok!==false||data.code!=='AUDIO_PROVIDER_UNAVAILABLE'||!data.fallback) throw new Error('Provider failure is not explicit/actionable');
+            console.log(`AUDIO_PROVIDER_UNAVAILABLE_HONESTLY ${data.detail||''}`);
+            NODE
+            exit 1
+          else
+            echo "Unexpected HTTP $STATUS"
+            cat /tmp/audio-response.bin
+            exit 1
+          fi
       - name: Show server log on failure
         if: failure()
         run: cat /tmp/maketik-audio.log || true
