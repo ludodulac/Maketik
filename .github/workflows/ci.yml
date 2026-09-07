@@ -17,3 +17,82 @@ jobs:
         run: npm install
       - name: Build
         run: npm run build
+      - name: Start production server
+        run: |
+          npm start > /tmp/maketik.log 2>&1 &
+          echo $! > /tmp/maketik.pid
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /tmp/home.html; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/maketik.log
+          exit 1
+      - name: Verify application home
+        run: |
+          grep -q "MAKE" /tmp/home.html
+          echo "Homepage served by the production Next.js server."
+      - name: Verify a real YouTube source
+        run: |
+          curl --silent --show-error \
+            -X POST http://127.0.0.1:3000/api/inspect-source \
+            -H 'content-type: application/json' \
+            --data '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}' \
+            > /tmp/inspect.json
+          cat /tmp/inspect.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const data=JSON.parse(fs.readFileSync('/tmp/inspect.json','utf8'));
+          if(!data.ok) throw new Error(`YouTube source inspection failed: ${data.error||'unknown error'}`);
+          if(data.kind!=='youtube') throw new Error('Source was not classified as YouTube');
+          if(!data.sourceId||!data.title) throw new Error('Verified YouTube metadata is incomplete');
+          if(data.transcript?.status!=='unavailable') throw new Error('Source inspection must not pretend that metadata is a transcript');
+          console.log(`Verified real YouTube metadata: ${data.title}`);
+          NODE
+      - name: Exercise real YouTube transcription or honest fallback
+        run: |
+          STATUS=$(curl --silent --show-error \
+            -o /tmp/transcript.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/transcribe-youtube \
+            -H 'content-type: application/json' \
+            --data '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}')
+          echo "HTTP $STATUS"
+          cat /tmp/transcript.json
+          STATUS="$STATUS" node - <<'NODE'
+          const fs=require('fs');
+          const data=JSON.parse(fs.readFileSync('/tmp/transcript.json','utf8'));
+          const status=Number(process.env.STATUS);
+          if(data.ok){
+            if(status!==200) throw new Error(`Successful transcription returned HTTP ${status}`);
+            if(!data.text||!data.wordCount||!data.provider) throw new Error('Transcription success is missing its real artifact/provenance');
+            console.log(`REAL_TRANSCRIPT_OK words=${data.wordCount} provider=${data.provider}`);
+          }else{
+            if(status!==422) throw new Error(`Unavailable transcription returned unexpected HTTP ${status}`);
+            if(!data.error||!data.fallback) throw new Error('Transcription failure is not explicit/actionable');
+            console.log(`REAL_TRANSCRIPT_UNAVAILABLE: ${data.error}`);
+          }
+          NODE
+      - name: Verify AI generation does not fake success without a server key
+        run: |
+          STATUS=$(curl --silent --show-error \
+            -o /tmp/generation.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-scripts \
+            -H 'content-type: application/json' \
+            --data '{"projectName":"CI truth check","transcript":"Ceci est une transcription de contrôle réellement fournie au test. Elle sert uniquement à vérifier le comportement du serveur sans clé externe."}')
+          echo "HTTP $STATUS"
+          cat /tmp/generation.json
+          STATUS="$STATUS" node - <<'NODE'
+          const fs=require('fs');
+          const data=JSON.parse(fs.readFileSync('/tmp/generation.json','utf8'));
+          const status=Number(process.env.STATUS);
+          if(status!==503||data.ok!==false||data.code!=='AI_NOT_CONFIGURED'){
+            throw new Error('Generation must explicitly report an unconfigured external AI provider in CI');
+          }
+          console.log('AI provider absence is reported honestly; no script is fabricated.');
+          NODE
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik.log || true
