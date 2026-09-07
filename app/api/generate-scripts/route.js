@@ -43,33 +43,46 @@ function cleanSegment(value){
     .trim();
 }
 
+function wordChunks(value,size=18){
+  const words=cleanSegment(value).split(/\s+/).filter(Boolean);
+  const chunks=[];
+  for(let i=0;i<words.length;i+=size){
+    const chunk=words.slice(i,i+size).join(' ');
+    if(chunk.split(/\s+/).length>=6) chunks.push(chunk);
+  }
+  return chunks;
+}
+
 function extractSegments(transcript){
-  const direct=String(transcript||'')
+  const raw=String(transcript||'')
     .split(/(?<=[.!?])\s+|\n+/)
     .map(cleanSegment)
-    .filter(x=>x.split(/\s+/).length>=5);
+    .filter(Boolean);
+  const bounded=raw.flatMap(segment=>segment.split(/\s+/).length>28?wordChunks(segment):[segment]);
   const seen=new Set();
-  const unique=direct.filter(x=>{
+  const unique=bounded.filter(x=>{
+    if(x.split(/\s+/).length<6) return false;
     const key=x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
     if(!key||seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  if(unique.length>=9) return unique;
-  const words=cleanSegment(transcript).split(/\s+/).filter(Boolean);
-  for(let i=0;i<words.length&&unique.length<18;i+=22){
-    const chunk=words.slice(i,i+22).join(' ').trim();
-    if(chunk.split(/\s+/).length>=8) unique.push(chunk);
+  if(unique.length>=18) return unique;
+  for(const chunk of wordChunks(transcript)){
+    const key=chunk.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+    if(key&&!seen.has(key)){
+      seen.add(key);
+      unique.push(chunk);
+    }
+    if(unique.length>=30) break;
   }
   return unique;
 }
 
 function localFallback(transcript){
   const segments=extractSegments(transcript);
-  if(segments.length<3){
-    return null;
-  }
-  const pick=(start,count=3)=>{
+  if(segments.length<6) return null;
+  const pick=(start,count=6)=>{
     const out=[];
     for(let i=0;i<count;i++) out.push(segments[(start+i)%segments.length]);
     return out;
@@ -80,21 +93,23 @@ function localFallback(transcript){
     pick(Math.max(2,Math.floor((segments.length*2)/3)))
   ];
   const definitions=[
-    {title:'Les points essentiels',angle:'Synthèse directe de la matière source',hook:'Trois éléments de la source suffisent déjà à poser le sujet.'},
-    {title:'Le fil à suivre',angle:'Progression en trois temps à partir de passages distincts',hook:'Pour comprendre la matière, il faut regarder comment les éléments s’enchaînent.'},
-    {title:'Un autre passage à creuser',angle:'Sélection d’un autre ensemble de faits pour ouvrir un angle différent',hook:'La même source contient aussi une autre piste exploitable.'}
+    {title:'Les points essentiels',angle:'Synthèse directe de la matière source',hook:'Voici les éléments de la source qui posent le mieux le sujet.'},
+    {title:'Le fil à suivre',angle:'Progression en plusieurs temps à partir de passages distincts',hook:'Pour suivre cette histoire, il faut remettre plusieurs éléments de la source dans l’ordre.'},
+    {title:'Une autre piste',angle:'Sélection d’un autre ensemble de passages pour ouvrir un angle différent',hook:'La même source permet aussi d’ouvrir un autre angle, à partir de passages différents.'}
   ];
+  const connectors=['D’abord','Puis','Ensuite','À ce stade','Autre élément','Enfin'];
   const scripts=groups.map((facts,index)=>{
     const d=definitions[index];
-    const script=`${d.hook} D’abord : ${facts[0]} Ensuite : ${facts[1]} Enfin : ${facts[2]}`;
+    const body=facts.map((fact,i)=>`${connectors[i]} : ${fact}`).join(' ');
+    const script=`${d.hook} ${body}`;
     const words=script.split(/\s+/).filter(Boolean).length;
-    return {...d,script,estimatedSeconds:Math.max(20,Math.round(words/2.6)),sourceFacts:facts};
+    return {...d,script,estimatedSeconds:Math.min(75,Math.max(35,Math.round(words/2.6))),sourceFacts:facts};
   });
   return {
     editorialProfile:{
       hook:'Non dérivé automatiquement sans moteur génératif externe.',
-      rhythm:'Brouillon extractif : structure courte en trois temps.',
-      structure:'Hook générique puis trois passages directement traçables à la transcription.',
+      rhythm:'Brouillon extractif court, découpé en plusieurs passages source.',
+      structure:'Hook neutre puis six passages directement traçables à la transcription.',
       language:'Le secours local privilégie la fidélité à la source plutôt que la réécriture stylistique.',
       transitions:'Transitions neutres et explicites.',
       ending:'À retravailler avant publication : ce mode ne remplace pas une génération éditoriale complète.'
