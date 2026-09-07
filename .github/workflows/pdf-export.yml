@@ -1,0 +1,66 @@
+name: Verify Maketik PDF export
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pdf-export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Start production server
+        run: |
+          npm start > /tmp/maketik-pdf.log 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/maketik-pdf.log
+          exit 1
+      - name: Reject PDF export for an unvalidated proposal
+        run: |
+          STATUS=$(curl --silent --show-error \
+            -o /tmp/pdf-rejected.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/export-script-pdf \
+            -H 'content-type: application/json' \
+            --data '{"projectName":"CI PDF","script":{"status":"proposed","title":"Non validé","script":"Ne doit pas sortir."}}')
+          test "$STATUS" = "409"
+          node - <<'NODE'
+          const fs=require('fs');
+          const data=JSON.parse(fs.readFileSync('/tmp/pdf-rejected.json','utf8'));
+          if(data.ok!==false||!data.error) throw new Error('Unvalidated export rejection is not explicit');
+          console.log('UNVALIDATED_PDF_REJECTED');
+          NODE
+      - name: Export a validated script as a real PDF
+        run: |
+          cat > /tmp/pdf-request.json <<'JSON'
+          {"projectName":"CI PDF","script":{"status":"validated","validatedAt":"2026-09-08T00:00:00.000Z","title":"Un été à l’échelle cosmique","angle":"Angle validé","hook":"L’étoile s’effondre : que reste-t-il ?","script":"Voici un script validé avec des accents : étoile, lumière, gravité, évolution. Il doit devenir un vrai document PDF exploitable.","sourceFacts":["Un trou noir exerce une gravité extrêmement forte.","Le texte a été fourni manuellement dans le parcours de secours."]}}
+          JSON
+          STATUS=$(curl --silent --show-error \
+            -D /tmp/pdf-headers.txt \
+            -o /tmp/script.pdf \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/export-script-pdf \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/pdf-request.json)
+          test "$STATUS" = "200"
+          grep -qi '^content-type: application/pdf' /tmp/pdf-headers.txt
+          grep -qi '^content-disposition: attachment;' /tmp/pdf-headers.txt
+          test "$(wc -c < /tmp/script.pdf)" -gt 700
+          test "$(head -c 5 /tmp/script.pdf)" = "%PDF-"
+          echo "VALIDATED_PDF_OK bytes=$(wc -c < /tmp/script.pdf)"
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik-pdf.log || true
