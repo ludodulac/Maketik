@@ -10,6 +10,7 @@ export const runtime='nodejs';
 const PROVIDER='edge-read-aloud-experimental';
 const VOICE='fr-FR-HenriNeural';
 const OUTPUT_FORMAT='audio-24khz-96kbitrate-mono-mp3';
+const PROVIDER_TIMEOUT_MS=25000;
 
 function safeFilename(value){
   return String(value||'script')
@@ -18,6 +19,14 @@ function safeFilename(value){
     .replace(/[^a-zA-Z0-9_-]+/g,'-')
     .replace(/^-+|-+$/g,'')
     .slice(0,70)||'script';
+}
+
+function withTimeout(promise,ms){
+  let timer;
+  const timeout=new Promise((_,reject)=>{
+    timer=setTimeout(()=>reject(new Error(`Fournisseur audio sans réponse après ${Math.round(ms/1000)} s`)),ms);
+  });
+  return Promise.race([promise,timeout]).finally(()=>clearTimeout(timer));
 }
 
 export async function POST(request){
@@ -44,9 +53,9 @@ export async function POST(request){
       rate:'-4%',
       pitch:'-2Hz',
       volume:'default',
-      timeout:20000
+      timeout:18000
     });
-    await tts.ttsPromise(text,outputPath);
+    await withTimeout(tts.ttsPromise(text,outputPath),PROVIDER_TIMEOUT_MS);
     const audio=await readFile(outputPath);
     if(audio.length<1000) throw new Error('Fichier audio anormalement court');
 
