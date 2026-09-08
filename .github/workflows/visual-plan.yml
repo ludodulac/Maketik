@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'lib/visual-plan.mjs'
+      - 'lib/script-state.mjs'
       - 'app/api/generate-visual-plan/**'
       - '.github/workflows/visual-plan.yml'
 
@@ -17,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: Install dependencies
         run: npm install
       - name: Build
@@ -43,12 +44,37 @@ jobs:
             --data '{"universe":"Oiseau enquêteur","character":"Bec","script":{"status":"proposed","script":"Texte proposé."}}')
           test "$STATUS" = "409"
           node -e "const d=require('/tmp/visual-rejected.json'); if(d.ok!==false||!d.error) throw new Error('Visual plan rejection is not explicit'); console.log('UNVALIDATED_VISUAL_PLAN_REJECTED')"
+      - name: Reject validated script with unverified factual provenance
+        run: |
+          cat > /tmp/unverified-request.json <<'JSON'
+          {
+            "universe":"Oiseau enquêteur",
+            "character":"Bec",
+            "characterBible":{"status":"validated","version":"character-bible-v1","characterId":"bec","validatedAt":"2026-09-08T00:00:00.000Z","identityAnchor":"Petit oiseau bleu et blanc, bec orange court, grands yeux, veste brune.","continuityRules":["Garder la même silhouette"]},
+            "script":{"id":"unverified-script","status":"validated","script":"Un fait à illustrer dans une vidéo courte.","sourceFactsDetailed":[{"text":"Un fait","sourceLabel":"SOURCE YOUTUBE 1","sourceUrl":"https://youtu.be/source","sourceExcerpt":"","provenanceVerified":false}]}
+          }
+          JSON
+          STATUS=$(curl --silent --show-error --max-time 10 -o /tmp/unverified-response.json -w '%{http_code}' -X POST http://127.0.0.1:3000/api/generate-visual-plan -H 'content-type: application/json' --data-binary @/tmp/unverified-request.json)
+          test "$STATUS" = "409"
+          node - <<'NODE'
+          const data=require('/tmp/unverified-response.json');
+          if(data.code!=='SCRIPT_FACT_PROVENANCE_UNVERIFIED') throw new Error('Unverified provenance was not blocked');
+          console.log('UNVERIFIED_SCRIPT_FACTS_BLOCK_VISUAL_PLAN');
+          NODE
       - name: Generate a traceable structural visual plan
         run: |
           cat > /tmp/visual-request.json <<'JSON'
           {
             "universe":"Oiseau enquêteur",
             "character":"Bec",
+            "characterBible":{
+              "status":"validated",
+              "version":"character-bible-v1",
+              "characterId":"bec",
+              "validatedAt":"2026-09-08T00:00:00.000Z",
+              "identityAnchor":"Petit oiseau bleu et blanc, bec orange court, grands yeux, veste brune.",
+              "continuityRules":["Garder la même silhouette", "Conserver le bec orange court et la veste brune"]
+            },
             "script":{
               "id":"validated-visual-script",
               "status":"validated",
@@ -61,6 +87,9 @@ jobs:
                 "Leur masse peut atteindre des millions ou des milliards de fois celle du Soleil.",
                 "Ces objets influencent leur environnement gravitationnel.",
                 "La formation précise des trous noirs supermassifs reste une question scientifique importante."
+              ],
+              "sourceFactsDetailed":[
+                {"text":"Un trou noir peut être si dense que même la lumière ne peut pas s'en échapper.","sourceLabel":"SOURCE YOUTUBE 1","sourceUrl":"https://youtu.be/source","sourceExcerpt":"Un trou noir peut être si dense que même la lumière ne peut pas s'en échapper.","provenanceVerified":true}
               ]
             }
           }
@@ -76,13 +105,15 @@ jobs:
           const data=require('/tmp/visual-plan.json');
           if(!data.ok||data.mode!=='structural-fallback'||data.provider!=='local-visual-planner') throw new Error('Visual plan truth metadata is missing');
           if(data.scriptId!=='validated-visual-script') throw new Error('Visual plan lost its validated script provenance');
+          if(data.factualProvenance?.factCount!==1||data.factualProvenance?.verifiedCount!==1) throw new Error('Visual plan lost verified factual provenance');
+          if(data.characterBible?.characterId!=='bec') throw new Error('Visual plan lost canonical character provenance');
           if(!Array.isArray(data.shots)||data.shots.length<4||data.shots.length>8) throw new Error(`Unexpected shot count ${data.shots?.length}`);
           for(const [index,shot] of data.shots.entries()){
             if(shot.order!==index+1||!shot.narrationExcerpt||!shot.visualNeed||!shot.documentaryReference||!shot.continuity||!shot.limitation) throw new Error('A visual shot is incomplete');
             if(!shot.continuity.includes('Bec')||!shot.continuity.includes('Oiseau enquêteur')) throw new Error('Project visual continuity was not preserved');
           }
           if(!data.limitations) throw new Error('Visual-plan limitations must remain explicit');
-          console.log(`VISUAL_PLAN_OK shots=${data.shots.length} mode=${data.mode}`);
+          console.log(`VISUAL_PLAN_OK shots=${data.shots.length} facts=${data.factualProvenance.verifiedCount} mode=${data.mode}`);
           NODE
       - name: Show server log on failure
         if: failure()
