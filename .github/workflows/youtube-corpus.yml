@@ -22,7 +22,7 @@ jobs:
       - name: Verify corpus truth boundaries
         run: |
           node --input-type=module <<'NODE'
-          import { buildYoutubeCorpus, normalizeYoutubeUrls } from './lib/youtube-corpus.mjs';
+          import { applyManualYoutubeTranscripts, buildYoutubeCorpus, normalizeYoutubeUrls } from './lib/youtube-corpus.mjs';
           const urls=normalizeYoutubeUrls(['https://youtu.be/a','https://youtu.be/b','https://youtu.be/a']);
           if(urls.length!==2) throw new Error('URL dedupe failed');
           const corpus=buildYoutubeCorpus([
@@ -35,4 +35,13 @@ jobs:
           if(corpus.sources[1].status!=='unavailable') throw new Error('Unavailable source not explicit');
           console.log(`YOUTUBE_CORPUS_OK sources=${corpus.sourceCount} ready=${corpus.readyCount} unavailable=${corpus.unavailableCount}`);
           console.log('UNAVAILABLE_SOURCE_EXCLUDED_FROM_FACTS');
+
+          const manual=applyManualYoutubeTranscripts(corpus,{
+            [urls[1]]:{text:'transcription manuelle source beta avec une provenance explicite',capturedAt:'2026-09-08T01:00:00Z'}
+          });
+          if(manual.readyCount!==2||manual.manualCount!==1||manual.unavailableCount!==0) throw new Error('Manual fallback counts wrong');
+          if(manual.sources[1].status!=='manual'||manual.sources[1].provider!=='manual') throw new Error('Manual provenance missing');
+          if(!manual.text.includes('transcription manuelle source beta')) throw new Error('Manual transcript missing from corpus');
+          if(!manual.text.includes('PROVENANCE: manual')) throw new Error('Manual provenance missing from factual corpus');
+          console.log('PER_SOURCE_MANUAL_FALLBACK_OK');
           NODE
