@@ -1,17 +1,19 @@
 'use client';
 import {useMemo,useState} from 'react';
 
-const shotKey=shotOrder=>String(shotOrder);
-
 export default function DocumentaryReferenceWorkspace({project,updateProject,setNotice}){
   const[preparing,setPreparing]=useState(false);
   const[searching,setSearching]=useState(null);
   const[checking,setChecking]=useState(null);
-  const research=project.referenceResearch||null;
-  const searches=project.referenceSearches||{};
-  const validated=project.documentaryReferences||[];
-  const validatedByShot=useMemo(()=>Object.fromEntries(validated.map(item=>[String(item.shotOrder),item])),[validated]);
   const plan=project.visualPlan;
+  const planKey=`${plan?.scriptId||'script'}:${plan?.generatedAt||'unknown'}`;
+  const storedResearch=project.referenceResearch||null;
+  const research=storedResearch?.visualPlanGeneratedAt===plan?.generatedAt?storedResearch:null;
+  const searches=project.referenceSearches||{};
+  const allReferences=project.documentaryReferences||[];
+  const validated=allReferences.filter(item=>item.planKey===planKey);
+  const validatedByShot=useMemo(()=>Object.fromEntries(validated.map(item=>[String(item.shotOrder),item])),[validated]);
+  const shotKey=shotOrder=>`${planKey}:${shotOrder}`;
 
   async function prepareTargets(){
     if(!plan||plan.status!=='validated'||plan.stale||preparing)return;
@@ -33,7 +35,7 @@ export default function DocumentaryReferenceWorkspace({project,updateProject,set
       const r=await fetch('/api/search-documentary-references',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target})});
       const data=await r.json();
       if(!r.ok||!data.ok)throw new Error(data.error||'Recherche documentaire impossible');
-      updateProject(project.id,{referenceSearches:{...searches,[key]:{...data,target,selectedCandidateId:null}}});
+      updateProject(project.id,{referenceSearches:{...searches,[key]:{...data,target,planKey,selectedCandidateId:null}}});
       setNotice(`${data.candidates.length} candidat(s) Commons trouvé(s) pour le plan ${target.shotOrder}. Aucun n’est encore validé.`);
     }catch(error){setNotice(error.message)}finally{setSearching(null)}
   }
@@ -55,14 +57,14 @@ export default function DocumentaryReferenceWorkspace({project,updateProject,set
 
   function validateCandidate(target,candidate){
     if(candidate.verificationStatus!=='http-verified'||!candidate.inspection?.ok)return;
-    const reference={shotOrder:target.shotOrder,target,candidate,inspection:candidate.inspection,status:'validated',validatedAt:new Date().toISOString()};
-    const next=[...validated.filter(item=>item.shotOrder!==target.shotOrder),reference].sort((a,b)=>a.shotOrder-b.shotOrder);
+    const reference={planKey,scriptId:plan.scriptId||null,visualPlanGeneratedAt:plan.generatedAt||null,shotOrder:target.shotOrder,target,candidate,inspection:candidate.inspection,status:'validated',validatedAt:new Date().toISOString()};
+    const next=[...allReferences.filter(item=>!(item.planKey===planKey&&item.shotOrder===target.shotOrder)),reference].sort((a,b)=>(a.validatedAt||'').localeCompare(b.validatedAt||''));
     updateProject(project.id,{documentaryReferences:next});
-    setNotice(`Référence documentaire du plan ${target.shotOrder} validée. Elle sera conservée jusqu’à retrait explicite.`);
+    setNotice(`Référence documentaire du plan ${target.shotOrder} validée pour ce plan visuel précis. Elle sera conservée jusqu’à retrait explicite.`);
   }
 
   function removeValidation(shotOrder){
-    updateProject(project.id,{documentaryReferences:validated.filter(item=>item.shotOrder!==shotOrder)});
+    updateProject(project.id,{documentaryReferences:allReferences.filter(item=>!(item.planKey===planKey&&item.shotOrder===shotOrder))});
     setNotice(`Validation documentaire du plan ${shotOrder} retirée.`);
   }
 
@@ -75,7 +77,7 @@ export default function DocumentaryReferenceWorkspace({project,updateProject,set
     {!research&&<div className="inlineActions"><button className="primary" onClick={prepareTargets} disabled={preparing}>{preparing?'Préparation…':'Préparer les cibles documentaires'}</button></div>}
     {research?.limitations&&<small className="blockHint">{research.limitations}</small>}
     {(research?.targets||[]).map(target=>{
-      const key=shotKey(target.shotOrder),search=searches[key],reference=validatedByShot[key];
+      const key=shotKey(target.shotOrder),search=searches[key],reference=validatedByShot[String(target.shotOrder)];
       return <article className={'scriptCard '+(reference?'validated':'')} key={key}>
         <div className="scriptHead"><div><span className="scriptNo">PLAN {String(target.shotOrder).padStart(2,'0')}</span><h3>{target.researchIntent}</h3><p>{target.searchQuery}</p></div><span className="chip">{reference?'référence validée':'à documenter'}</span></div>
         <blockquote>{target.sourceFact||target.narrationExcerpt}</blockquote>
