@@ -16,12 +16,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install current yt-dlp
         run: python -m pip install --upgrade yt-dlp
-      - name: Probe subtitle tracks only
+      - name: Show runtimes
+        run: |
+          python --version
+          node --version
+          which node
+          yt-dlp --version
+      - name: Probe subtitle tracks only with explicit JS runtime
         shell: bash
         run: |
           set -u
+          NODE_BIN="$(which node)"
+          YTDLP=(yt-dlp --js-runtimes "node:${NODE_BIN}")
           urls=(
             'https://youtu.be/b1m_6km44JQ?is=p4LLagtOGx3C7kMl'
             'https://youtu.be/horkXy4kMro?is=lbNvJhFt07ZzQJIt'
@@ -34,31 +45,31 @@ jobs:
             url="${urls[$i]}"
             echo "=== $id ==="
             set +e
-            yt-dlp --skip-download --list-subs "$url" >"/tmp/${id}-subs.txt" 2>"/tmp/${id}-subs.err"
+            "${YTDLP[@]}" --skip-download --list-subs "$url" >"/tmp/${id}-subs.txt" 2>"/tmp/${id}-subs.err"
             status=$?
             set -e
-            echo "GAIN_FRIC_SUBTITLE_LIST id=$id status=$status"
+            echo "GAIN_FRIC_SUBTITLE_LIST_JS id=$id status=$status"
             cat "/tmp/${id}-subs.txt" || true
             cat "/tmp/${id}-subs.err" || true
 
             if grep -Eqi 'Available subtitles|Available automatic captions|fr([_-]|$)|French' "/tmp/${id}-subs.txt"; then
-              echo "GAIN_FRIC_SUBTITLE_TRACKS_VISIBLE id=$id true"
+              echo "GAIN_FRIC_SUBTITLE_TRACKS_VISIBLE_JS id=$id true"
             else
-              echo "GAIN_FRIC_SUBTITLE_TRACKS_VISIBLE id=$id false"
+              echo "GAIN_FRIC_SUBTITLE_TRACKS_VISIBLE_JS id=$id false"
             fi
 
             rm -f "/tmp/${id}"*.vtt "/tmp/${id}"*.srt "/tmp/${id}"*.json3 "/tmp/${id}"*.ttml
             set +e
-            yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs 'fr.*,fr,en.*,en' --sub-format 'vtt/best' -o "/tmp/${id}" "$url" >"/tmp/${id}-download.txt" 2>"/tmp/${id}-download.err"
+            "${YTDLP[@]}" --skip-download --write-subs --write-auto-subs --sub-langs 'fr.*,fr,en.*,en' --sub-format 'vtt/best' -o "/tmp/${id}" "$url" >"/tmp/${id}-download.txt" 2>"/tmp/${id}-download.err"
             dl_status=$?
             set -e
-            echo "GAIN_FRIC_SUBTITLE_DOWNLOAD id=$id status=$dl_status"
+            echo "GAIN_FRIC_SUBTITLE_DOWNLOAD_JS id=$id status=$dl_status"
             cat "/tmp/${id}-download.txt" || true
             cat "/tmp/${id}-download.err" || true
             files=$(find /tmp -maxdepth 1 -type f \( -name "${id}*.vtt" -o -name "${id}*.srt" -o -name "${id}*.json3" -o -name "${id}*.ttml" \) -printf '%f\n' | sort | tr '\n' ',' | sed 's/,$//')
             if [ -n "$files" ]; then
-              echo "GAIN_FRIC_SUBTITLE_FILES id=$id files=$files"
+              echo "GAIN_FRIC_SUBTITLE_FILES_JS id=$id files=$files"
             else
-              echo "GAIN_FRIC_SUBTITLE_FILES id=$id files=none"
+              echo "GAIN_FRIC_SUBTITLE_FILES_JS id=$id files=none"
             fi
           done
