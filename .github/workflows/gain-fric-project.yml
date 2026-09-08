@@ -11,6 +11,7 @@ on:
       - 'app/api/transcribe-youtube/route.js'
       - 'app/api/generate-scripts/route.js'
       - 'lib/youtube-corpus-state.mjs'
+      - 'lib/script-factual-sources.mjs'
       - 'scripts/probe-gain-fric.mjs'
       - '.github/workflows/gain-fric-project.yml'
   workflow_dispatch:
@@ -38,6 +39,21 @@ jobs:
           if(merged.readyCount!==1||merged.unavailableCount!==0||!merged.text.includes('Texte humain validé')) throw new Error('Rebuilt corpus lost the manual source');
           console.log('MANUAL_YOUTUBE_TRANSCRIPT_PRESERVED');
           NODE
+      - name: Verify source-aware factual helpers
+        run: |
+          node --input-type=module - <<'NODE'
+          import {extractSourceAwareSegments,parseFactualYoutubeSources,verifyDetailedFacts} from './lib/script-factual-sources.mjs';
+          const corpus=`[SOURCE YOUTUBE 1]\nURL: https://youtu.be/source-a\nLa première source explique un principe simple avec plusieurs détails concrets. Elle ajoute ensuite une deuxième information utile pour le raisonnement.\n\n[SOURCE YOUTUBE 2]\nURL: https://youtu.be/source-b\nLa seconde source apporte une autre astuce concrète avec assez de matière pour être découpée. Elle donne aussi une précision distincte à conserver.`;
+          const sources=parseFactualYoutubeSources(corpus);
+          if(sources.length!==2||sources[1].sourceUrl!=='https://youtu.be/source-b') throw new Error('Source parsing failed');
+          const segments=extractSourceAwareSegments(corpus);
+          if(!segments.some(x=>x.sourceUrl==='https://youtu.be/source-a')||!segments.some(x=>x.sourceUrl==='https://youtu.be/source-b')) throw new Error('Source-aware segments lost a source');
+          const checked=verifyDetailedFacts([{text:'fait test',sourceLabel:'SOURCE YOUTUBE 2',sourceUrl:'https://youtu.be/source-b',sourceExcerpt:'La seconde source apporte une autre astuce concrète'}],corpus);
+          if(!checked[0]?.provenanceVerified||checked[0].sourceUrl!=='https://youtu.be/source-b') throw new Error('Fact provenance verification failed');
+          const rejected=verifyDetailedFacts([{text:'fait inventé',sourceLabel:'SOURCE YOUTUBE 1',sourceUrl:'https://youtu.be/source-a',sourceExcerpt:'extrait qui n’existe pas'}],corpus);
+          if(rejected[0]?.provenanceVerified||rejected[0]?.sourceExcerpt) throw new Error('Invented excerpt was accepted');
+          console.log('SOURCE_LEVEL_FACT_PROVENANCE_HELPERS_OK');
+          NODE
       - name: Start Maketik
         run: |
           npm run start -- --hostname 127.0.0.1 --port 3000 >/tmp/maketik.log 2>&1 &
@@ -49,6 +65,22 @@ jobs:
           grep -q 'Gain fric' /tmp/gain-fric.html
           grep -q 'PREMIER PROJET RÉEL' /tmp/gain-fric.html
           echo 'GAIN_FRIC_PROJECT_ROUTE_OK'
+      - name: Verify local scripts keep YouTube provenance
+        run: |
+          node --input-type=module - <<'NODE'
+          const sourceA='La première vidéo présente une astuce financière concrète avec suffisamment de détails pour être citée précisément. Elle explique ensuite pourquoi cette méthode demande de vérifier les conditions avant de l’utiliser. Enfin elle décrit une conséquence pratique qui aide à comprendre quand cette astuce est utile.';
+          const sourceB='La deuxième vidéo décrit une autre méthode pour économiser de l’argent dans une situation quotidienne. Elle précise plusieurs étapes à suivre et rappelle qu’il faut comparer les options disponibles. Elle ajoute enfin un exemple concret permettant de distinguer cette méthode de la première.';
+          const transcript=`[SOURCE YOUTUBE 1]\nURL: https://youtu.be/source-a\n${sourceA}\n\n[SOURCE YOUTUBE 2]\nURL: https://youtu.be/source-b\n${sourceB}`;
+          const response=await fetch('http://127.0.0.1:3000/api/generate-scripts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectName:'Gain fric',transcript,references:[]})});
+          const body=await response.json();
+          if(!response.ok||!body.ok) throw new Error(JSON.stringify(body));
+          if(body.factualSourceCount!==2) throw new Error('Wrong factual source count');
+          if(!body.scripts?.length) throw new Error('No scripts generated');
+          const facts=body.scripts.flatMap(script=>script.sourceFactsDetailed||[]);
+          if(!facts.length||facts.some(fact=>!fact.provenanceVerified)) throw new Error('Unverified local fact provenance');
+          if(!facts.some(fact=>fact.sourceUrl==='https://youtu.be/source-a')||!facts.some(fact=>fact.sourceUrl==='https://youtu.be/source-b')) throw new Error('One factual source disappeared from script provenance');
+          console.log(`GAIN_FRIC_SCRIPT_PROVENANCE_OK scripts=${body.scripts.length} facts=${facts.length} sources=${body.factualSourceCount}`);
+          NODE
       - name: Probe the four real factual sources without inventing availability
         run: |
           node scripts/probe-gain-fric.mjs | tee /tmp/probe.log
