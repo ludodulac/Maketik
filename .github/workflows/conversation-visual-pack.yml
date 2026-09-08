@@ -1,0 +1,45 @@
+name: Verify Maketik conversation visual pack
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/conversation-visual-pack.mjs'
+      - 'app/api/prepare-conversation-visual-pack/route.js'
+      - '.github/workflows/conversation-visual-pack.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: Verify pack invariants
+        run: |
+          node --input-type=module <<'NODE'
+          import { buildConversationVisualPack } from './lib/conversation-visual-pack.mjs';
+          const project={name:'Test Maketik',character:{name:'Bec'}};
+          const script={id:'s1',status:'validated',validatedAt:'2026-09-08T00:00:00Z',title:'Test'};
+          const bible={status:'validated',version:'character-bible-v1',validatedAt:'2026-09-08T00:00:00Z',characterId:'bec',characterName:'Bec',identityAnchor:'petit oiseau enquêteur original',silhouette:'compacte',face:'bec court et yeux expressifs',proportions:'tête légèrement grande',clothing:'petite veste simple',recurringProps:'carnet',universeRule:'ligne éditoriale simple',continuityRules:['même bec','même veste']};
+          const plan={status:'validated',stale:false,generatedAt:'2026-09-08T00:00:00Z',shots:[{order:1,purpose:'introduire le sujet',visualNeed:'Bec observe une carte sur son bureau',continuity:'garder la veste et le carnet'}]};
+          for (const [label,args] of [
+            ['script',{project,script:{...script,status:'proposed'},characterBible:bible,visualPlan:plan}],
+            ['bible',{project,script,characterBible:{...bible,status:'proposed'},visualPlan:plan}],
+            ['plan',{project,script,characterBible:bible,visualPlan:{...plan,status:'proposed'}}]
+          ]) {
+            let blocked=false; try { buildConversationVisualPack(args); } catch { blocked=true; }
+            if(!blocked) throw new Error(`Unvalidated ${label} was accepted`);
+          }
+          const pack=buildConversationVisualPack({project,script,characterBible:bible,visualPlan:plan});
+          if(pack.generation!=='not-generated') throw new Error('Pack falsely claims generation');
+          if(pack.mode!=='chatgpt-conversation') throw new Error('Wrong mode');
+          if(!pack.prompt.includes('Bec observe une carte')) throw new Error('Shot missing');
+          if(!pack.prompt.includes('même bec')) throw new Error('Canon continuity missing');
+          console.log(`CONVERSATION_VISUAL_PACK_OK version=${pack.version} shot=${pack.visualPlan.shotOrder}`);
+          console.log('NO_IMAGE_GENERATION_CLAIMED');
+          NODE
