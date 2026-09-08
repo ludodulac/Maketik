@@ -425,3 +425,43 @@ Les docs TikTok vérifiées le 2026-09-08 confirment l’existence de l’oEmbed
 ### Prochaine action autoritaire
 
 **Ne pas élargir davantage le visuel.** Fermer d’abord la boucle TikTok honnête : `URL TikTok → métadonnée/description réellement disponible → transcription réelle si une voie vérifiée existe OU fallback manuel explicite par référence → dérivation éditoriale traçable`. Une fois cette tranche testée, réévaluer la priorité suivante et mettre ce handoff à jour avant de reprendre les illustrations.
+
+## 19. TIKTOK FERMÉ — reprise visuelle limitée à la bible canonique
+
+> Cette section supersède la section 18 pour la priorité active.
+
+### Tranche TikTok réellement fermée
+
+La boucle TikTok honnête est maintenant codée et vérifiée en GitHub Actions :
+- `app/api/inspect-source/route.js` conserve oEmbed comme métadonnée réelle et expose séparément `description` et `transcript.status: unavailable` ;
+- la caption/description oEmbed n’est jamais requalifiée en transcription ;
+- `lib/tiktok-reference.mjs` et `/api/prepare-tiktok-reference` préparent une preuve éditoriale `metadata-only` ou `manual-spoken-text` ;
+- un texte parlé collé manuellement garde `provider: manual`, sa date et sa limitation de provenance ;
+- l’interface permet ce fallback **par TikTok** et affiche des métriques simples de rythme/structure ;
+- `app/api/generate-scripts/route.js` interdit explicitement TikTok comme source factuelle et réserve ces références aux mécanismes éditoriaux abstraits ;
+- le fallback local reconnaît les preuves TikTok mais dit explicitement qu’il ne les interprète pas stylistiquement sans moteur génératif externe.
+
+Le workflow `.github/workflows/tiktok-reference.yml` a passé sur une vraie URL publique TikTok avec les marqueurs :
+- `TIKTOK_OEMBED_OK id=6718335390845095173 author=Scout, Suki & Stella` ;
+- `TIKTOK_METADATA_ONLY_OK` ;
+- `TIKTOK_MANUAL_EVIDENCE_OK words=38` ;
+- `TIKTOK_FACTUAL_SEPARATION_OK drafts=3`.
+
+Le test de séparation introduit volontairement un marqueur présent uniquement dans le texte TikTok manuel et vérifie qu’il n’apparaît pas dans les brouillons factuels locaux produits depuis la transcription YouTube.
+
+Le CI principal et le workflow PDF sont restés verts sur le même head `7d14b63f6753c9e7be14f2f5d6b945ddf0079364`.
+
+### Limite TikTok à ne pas masquer
+
+Il n’existe toujours pas de transcription automatique TikTok vérifiée pour un simple lien dans Maketik. Les docs officielles consultées exposent oEmbed/Embed Player et des APIs nécessitant enregistrement/scopes/autorisation, mais pas une API publique de transcription prête à consommer pour un lien vidéo. Le fallback manuel par TikTok est donc la branche normale actuelle. Ne jamais annoncer une transcription TikTok automatique tant qu’un vrai texte extrait n’a pas été obtenu par une voie supportée et testé.
+
+### Nouvelle priorité active
+
+La priorité suivante redevient visuelle, mais **pas encore la génération d’illustrations**. La prochaine tranche autorisée est la **bible visuelle canonique du personnage au niveau projet** :
+1. transformer le placeholder de personnage choisi en un modèle canonique structuré et éditable ;
+2. verrouiller/valider cette bible explicitement ;
+3. protéger une bible validée contre toute régénération silencieuse ;
+4. rattacher ensuite les plans visuels à cette version canonique ;
+5. ne générer aucune image finale tant que cette garantie de continuité n’est pas en place et testée.
+
+Une fois la bible canonique fermée et testée, réévaluer explicitement dans ce handoff avant de reprendre un moteur d’illustrations ou un export PNG.
