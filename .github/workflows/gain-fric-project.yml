@@ -1,0 +1,45 @@
+name: Verify Maketik Gain fric project
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/gain-fric/page.js'
+      - 'app/components/YouTubeCorpusWorkspace.js'
+      - 'app/components/TikTokReferenceWorkspace.js'
+      - 'app/components/CharacterBibleWorkspace.js'
+      - 'app/api/transcribe-youtube/route.js'
+      - 'app/api/generate-scripts/route.js'
+      - '.github/workflows/gain-fric-project.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: Start Maketik
+        run: |
+          npm run start -- --hostname 127.0.0.1 --port 3000 >/tmp/maketik.log 2>&1 &
+          echo $! >/tmp/maketik.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3000/gain-fric >/tmp/gain-fric.html; then break; fi
+            sleep 1
+          done
+          grep -q 'Gain fric' /tmp/gain-fric.html
+          grep -q 'PREMIER PROJET RÉEL' /tmp/gain-fric.html
+          echo 'GAIN_FRIC_PROJECT_ROUTE_OK'
+      - name: Verify factual gate stays closed on blocked real sources
+        run: |
+          node scripts/probe-gain-fric.mjs | tee /tmp/probe.log
+          grep -q 'GAIN_FRIC_CORPUS sources=4 ready=0 unavailable=4 words=0' /tmp/probe.log
+          grep -q 'GAIN_FRIC_MANUAL_FALLBACK_REQUIRED all_sources_unavailable=true' /tmp/probe.log
+          echo 'GAIN_FRIC_FACTUAL_GATE_OK'
+      - name: Stop Maketik
+        if: always()
+        run: kill $(cat /tmp/maketik.pid) 2>/dev/null || true
