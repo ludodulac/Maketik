@@ -118,10 +118,24 @@ function localFallback(transcript){
   };
 }
 
+function formatEditorialReference(reference,index){
+  const evidence=reference?.evidence||null;
+  const lines=[`Référence ${index+1}: ${reference?.author||reference?.title||reference?.url||'TikTok'}`];
+  if(reference?.description)lines.push(`Caption/métadonnée oEmbed: ${String(reference.description).slice(0,1200)}`);
+  if(evidence?.spokenText)lines.push(`Texte parlé fourni manuellement: ${String(evidence.spokenText).slice(0,6000)}`);
+  if(evidence?.editorialMetrics)lines.push(`Mesures: ${JSON.stringify(evidence.editorialMetrics)}`);
+  lines.push(`Statut de preuve: ${evidence?.evidenceStatus||'metadata-only'}`);
+  lines.push('INTERDICTION: cette référence TikTok n’est pas une source factuelle. Ne reprendre aucun fait, chiffre, nom ou événement depuis elle dans sourceFacts ou dans le contenu factuel du script.');
+  lines.push('USAGE AUTORISÉ: mécanismes éditoriaux abstraits seulement; ne pas copier les formulations ni imiter une voix identifiable.');
+  return lines.join('\n');
+}
+
 export async function POST(request){
   const body=await request.json().catch(()=>({}));
   const transcript=String(body.transcript||'').trim();
   if(!transcript) return NextResponse.json({ok:false,error:'Transcription source manquante'},{status:400});
+  const references=Array.isArray(body.references)?body.references:[];
+  const referenceEvidenceCount=references.filter(reference=>reference?.evidence).length;
 
   if(!process.env.OPENAI_API_KEY){
     const fallback=localFallback(transcript);
@@ -135,13 +149,14 @@ export async function POST(request){
       model:'local-extractive-v1',
       generationMode:'fallback',
       originality:'extractive-draft',
-      limitations:'Brouillons extractifs générés sans IA externe. Ils restent fidèles aux passages source mais ne constituent pas une réécriture éditoriale originale équivalente au moteur IA.',
+      referenceEvidenceCount,
+      limitations:'Brouillons extractifs générés sans IA externe. Ils restent fidèles aux passages source YouTube mais ne constituent pas une réécriture éditoriale originale équivalente au moteur IA. Les références TikTok éventuellement préparées sont conservées mais ne sont pas interprétées stylistiquement par ce fallback.',
       generatedAt:new Date().toISOString()
     });
   }
 
-  const references=(body.references||[]).map((r,i)=>`Référence ${i+1}: ${r.title||r.url||'TikTok'}${r.author?` — ${r.author}`:''}`).join('\n');
-  const prompt=`Tu es le moteur éditorial de Maketik, un outil personnel de création de vidéos courtes en français.\n\nOBJECTIF\nÀ partir d'une transcription YouTube factuelle, proposer plusieurs angles distincts et scripts courts originaux. Les références TikTok servent uniquement à déduire des mécanismes éditoriaux généraux: hook, rythme, longueur des phrases, transitions, densité, suspense, humour, relances et type de conclusion. Ne copie jamais des formulations, tournures distinctives, personnages, blagues ou une voix identifiable d'un créateur.\n\nCONTRAINTES\n- Rester fidèle aux faits réellement présents dans la transcription.\n- Ne pas inventer un fait non supporté.\n- Chaque script doit fonctionner seul et viser environ 45 à 75 secondes.\n- Français naturel à l'oral, phrases plutôt courtes.\n- Produire au moins 3 scripts réellement différents si la matière le permet.\n- sourceFacts doit lister les faits du transcript utilisés dans le script.\n\nPROJET\nNom: ${body.projectName||'Sans nom'}\nUnivers graphique: ${body.universe||'non précisé'}\nPersonnage: ${body.character||'non précisé'}\n\nRÉFÉRENCES ÉDITORIALES\n${references||'Métadonnées seules; aucune transcription TikTok fournie.'}\n\nTRANSCRIPTION YOUTUBE\n${transcript.slice(0,120000)}`;
+  const editorialReferences=references.map(formatEditorialReference).join('\n\n');
+  const prompt=`Tu es le moteur éditorial de Maketik, un outil personnel de création de vidéos courtes en français.\n\nOBJECTIF\nÀ partir d'une transcription YouTube factuelle, proposer plusieurs angles distincts et scripts courts originaux. Les références TikTok servent uniquement à déduire des mécanismes éditoriaux généraux: hook, rythme, longueur des phrases, transitions, densité, suspense, humour, relances et type de conclusion. Ne copie jamais des formulations, tournures distinctives, personnages, blagues ou une voix identifiable d'un créateur.\n\nSÉPARATION DES SOURCES — OBLIGATOIRE\n- La transcription YouTube ci-dessous est la seule matière factuelle.\n- Les TikTok ne sont jamais une source factuelle, même lorsqu’un texte parlé manuel est fourni.\n- sourceFacts doit contenir uniquement des passages/faits supportés par la transcription YouTube.\n- Une caption TikTok oEmbed est une métadonnée du post, pas une transcription.\n- Le texte parlé TikTok, lorsqu’il existe, a été fourni manuellement et sert uniquement à comprendre des mécanismes éditoriaux abstraits.\n\nCONTRAINTES\n- Rester fidèle aux faits réellement présents dans la transcription YouTube.\n- Ne pas inventer un fait non supporté.\n- Chaque script doit fonctionner seul et viser environ 45 à 75 secondes.\n- Français naturel à l'oral, phrases plutôt courtes.\n- Produire au moins 3 scripts réellement différents si la matière le permet.\n- Ne pas imiter un créateur identifiable.\n\nPROJET\nNom: ${body.projectName||'Sans nom'}\nUnivers graphique: ${body.universe||'non précisé'}\nPersonnage: ${body.character||'non précisé'}\n\nRÉFÉRENCES ÉDITORIALES TIKTOK\n${editorialReferences||'Aucune preuve TikTok préparée; ne déduis aucun style spécifique.'}\n\nTRANSCRIPTION YOUTUBE — SEULE SOURCE FACTUELLE\n${transcript.slice(0,120000)}`;
 
   try{
     const response=await fetch('https://api.openai.com/v1/responses',{
@@ -159,7 +174,7 @@ export async function POST(request){
     if(!response.ok) throw new Error(data?.error?.message||'Erreur du moteur IA');
     const text=outputText(data);
     const parsed=JSON.parse(text);
-    return NextResponse.json({ok:true,...parsed,provider:'openai',generationMode:'ai',model:data.model||process.env.OPENAI_MODEL||'gpt-5.6-luna',generatedAt:new Date().toISOString()});
+    return NextResponse.json({ok:true,...parsed,provider:'openai',generationMode:'ai',referenceEvidenceCount,model:data.model||process.env.OPENAI_MODEL||'gpt-5.6-luna',generatedAt:new Date().toISOString()});
   }catch(error){
     return NextResponse.json({ok:false,error:'Génération des scripts impossible.',detail:error?.message||'Erreur inconnue'},{status:502});
   }
