@@ -1,0 +1,34 @@
+name: Verify Maketik YouTube corpus UI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/components/YouTubeCorpusWorkspace.js'
+      - 'app/youtube-corpus/page.js'
+      - '.github/workflows/youtube-corpus-ui.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: Start Maketik
+        run: |
+          npm run start -- --hostname 127.0.0.1 --port 3000 >/tmp/maketik.log 2>&1 &
+          echo $! >/tmp/maketik.pid
+          for i in {1..30}; do curl -fsS http://127.0.0.1:3000/youtube-corpus >/tmp/page.html && break; sleep 1; done
+          grep -q 'MAKE' /tmp/page.html
+          echo 'YOUTUBE_CORPUS_UI_ROUTE_OK'
+      - name: Verify corpus API with real Gain fric URLs
+        run: |
+          node scripts/probe-gain-fric.mjs
+      - name: Stop Maketik
+        if: always()
+        run: kill $(cat /tmp/maketik.pid) 2>/dev/null || true
