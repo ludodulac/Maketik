@@ -1,0 +1,48 @@
+name: Probe Gain fric audio fallback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gain-fric-audio-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install yt-dlp
+        run: python -m pip install --disable-pip-version-check yt-dlp
+      - name: Probe one real Gain fric audio source
+        shell: bash
+        run: |
+          set +e
+          yt-dlp \
+            --no-playlist \
+            --max-filesize 50M \
+            -f 'bestaudio[ext=m4a]/bestaudio' \
+            -o '/tmp/gain-fric-audio.%(ext)s' \
+            'https://youtu.be/b1m_6km44JQ?is=p4LLagtOGx3C7kMl' \
+            >/tmp/yt-dlp.log 2>&1
+          STATUS=$?
+          set -e
+          cat /tmp/yt-dlp.log
+          if [ "$STATUS" -ne 0 ]; then
+            echo "GAIN_FRIC_AUDIO_FALLBACK_BLOCKED status=$STATUS"
+            exit 0
+          fi
+          FILE=$(find /tmp -maxdepth 1 -type f -name 'gain-fric-audio.*' | head -1)
+          if [ -z "$FILE" ]; then
+            echo 'GAIN_FRIC_AUDIO_FALLBACK_BLOCKED reason=no_file'
+            exit 0
+          fi
+          BYTES=$(wc -c < "$FILE")
+          if [ "$BYTES" -lt 10000 ]; then
+            echo "GAIN_FRIC_AUDIO_FALLBACK_BLOCKED reason=too_small bytes=$BYTES"
+            exit 0
+          fi
+          echo "GAIN_FRIC_AUDIO_AVAILABLE bytes=$BYTES file=$(basename "$FILE")"
