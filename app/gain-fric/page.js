@@ -24,6 +24,15 @@ const initialProject=()=>({
   status:'sources_ready',inspection:null,youtubeCorpus:null,transcript:null,tiktokEvidence:{},scripts:[],editorialProfile:null,lastGeneration:null,characterBible:null
 });
 
+function ScriptFacts({script}){
+  const detailed=Array.isArray(script.sourceFactsDetailed)?script.sourceFactsDetailed:[];
+  if(detailed.length){
+    return <details><summary>Faits source utilisés · provenance YouTube</summary><ul>{detailed.map((fact,n)=><li key={n}><b>{fact.sourceLabel||'SOURCE YOUTUBE'}</b>{' · '}{fact.text}{fact.sourceUrl&&<><br/><small>{fact.sourceUrl}</small></>}{fact.sourceExcerpt&&<><br/><small>Extrait vérifié : “{fact.sourceExcerpt}”</small></>}{fact.provenanceVerified===false&&<><br/><small className="blockHint">Provenance non vérifiée automatiquement : à contrôler avant validation.</small></>}</li>)}</ul></details>;
+  }
+  if(script.sourceFacts?.length) return <details><summary>Faits source utilisés</summary><ul>{script.sourceFacts.map((fact,n)=><li key={n}>{fact}</li>)}</ul></details>;
+  return null;
+}
+
 export default function GainFricPage(){
   const [project,setProject]=useState(initialProject());
   const [notice,setNotice]=useState('');
@@ -49,8 +58,8 @@ export default function GainFricPage(){
       const r=await fetch('/api/generate-scripts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectName:project.name,universe:'Oiseau enquêteur',character:'Bec',references:refs,transcript:project.transcript.text})});
       const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||'Génération impossible');
       const scripts=mergeGeneratedScripts(project.scripts,data.scripts,data,uid);
-      updateProject(project.id,{scripts,editorialProfile:data.editorialProfile,lastGeneration:{provider:data.provider,model:data.model,generationMode:data.generationMode,limitations:data.limitations,generatedAt:data.generatedAt},status:'scripts_ready'});
-      setNotice(data.generationMode==='fallback'?`${data.scripts.length} brouillons extractifs créés depuis le corpus factuel uniquement.`:`${data.scripts.length} scripts originaux proposés depuis le corpus factuel.`);
+      updateProject(project.id,{scripts,editorialProfile:data.editorialProfile,lastGeneration:{provider:data.provider,model:data.model,generationMode:data.generationMode,limitations:data.limitations,factualSourceCount:data.factualSourceCount,generatedAt:data.generatedAt},status:'scripts_ready'});
+      setNotice(data.generationMode==='fallback'?`${data.scripts.length} brouillons extractifs créés depuis ${data.factualSourceCount||1} source(s) factuelle(s), avec provenance par vidéo.`:`${data.scripts.length} scripts originaux proposés depuis ${data.factualSourceCount||1} source(s) factuelle(s), avec provenance par vidéo.`);
     }catch(error){setNotice(error.message)}finally{setGenerating(false)}
   }
   function setScriptStatus(id,status){updateProject(project.id,{scripts:(project.scripts||[]).map(s=>s.id===id?{...s,status,validatedAt:status==='validated'?new Date().toISOString():s.validatedAt}:s)})}
@@ -63,11 +72,11 @@ export default function GainFricPage(){
         <div className="panel"><h2>1. Sources réelles</h2><p>La reconnaissance des liens reste séparée de la transcription.</p><button className="primary" onClick={inspectSources} disabled={inspecting}>{inspecting?'Vérification…':'Vérifier les 8 sources'}</button>{project.inspection&&<div className="pipeline"><b>{project.inspection.tiktoks.filter(x=>x.ok).length + project.inspection.youtubes.filter(x=>x.ok).length}</b><span>sources reconnues</span><em>/ 8</em></div>}</div>
         <div className="panel"><h2>Règle de vérité</h2><p>TikTok = structure et rythme seulement. YouTube = matière factuelle seulement. Une vidéo non transcrite ne fournit aucun fait.</p></div>
         <YouTubeCorpusWorkspace project={project} updateProject={updateProject} setNotice={setNotice}/>
-        <div className="panel"><h2>3. Scripts</h2><p>La génération reste bloquée tant qu'aucune source YouTube n'est réellement prête.</p><button className="primary" onClick={generateScripts} disabled={generating||!project.transcript?.text}>{generating?'Génération…':'Générer depuis le corpus'}</button>{!project.transcript?.text&&<small className="blockHint">Corpus factuel vide : aucune invention autorisée.</small>}{project.lastGeneration?.generationMode==='fallback'&&<small className="blockHint">Mode local : brouillons extractifs, pas scripts originaux IA.</small>}</div>
+        <div className="panel"><h2>3. Scripts</h2><p>La génération reste bloquée tant qu'aucune source YouTube n'est réellement prête. Chaque fait généré garde ensuite la vidéo YouTube dont il provient.</p><button className="primary" onClick={generateScripts} disabled={generating||!project.transcript?.text}>{generating?'Génération…':'Générer depuis le corpus'}</button>{!project.transcript?.text&&<small className="blockHint">Corpus factuel vide : aucune invention autorisée.</small>}{project.lastGeneration?.generationMode==='fallback'&&<small className="blockHint">Mode local : brouillons extractifs, pas scripts originaux IA.</small>}</div>
       </div>
       {project.inspection?.tiktoks?.some(source=>source?.ok)&&<TikTokReferenceWorkspace project={project} updateProject={updateProject} setNotice={setNotice}/>} 
       <CharacterBibleWorkspace project={project} universeName="Oiseau enquêteur" characterName="Bec" updateProject={updateProject} setNotice={setNotice}/>
-      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=><article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div>{s.sourceFacts?.length>0&&<details><summary>Faits source utilisés</summary><ul>{s.sourceFacts.map((fact,n)=><li key={n}>{fact}</li>)}</ul></details>}<div className="inlineActions">{s.status==='validated'?<button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')}>✓ Valider ce script</button>}</div></article>)}</div>}
+      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=><article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div><ScriptFacts script={s}/><div className="inlineActions">{s.status==='validated'?<button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')}>✓ Valider ce script</button>}</div></article>)}</div>}
     </div>
   </main>;
 }
