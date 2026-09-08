@@ -1,0 +1,46 @@
+name: Integrate Maketik YouTube corpus main
+
+on:
+  push:
+    branches: [integrate-youtube-corpus-main]
+    paths:
+      - 'scripts/integrate-youtube-corpus-main.mjs'
+      - '.github/workflows/integrate-youtube-corpus-main.yml'
+      - 'app/page.js'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integrate-youtube-corpus-main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply conservative migration
+        run: node scripts/integrate-youtube-corpus-main.mjs
+      - run: npm install
+      - run: npm run build
+      - name: Verify integration markers
+        run: |
+          grep -q "YouTubeCorpusWorkspace" app/page.js
+          grep -q "SOURCES YOUTUBE" app/page.js
+          grep -q "youtubeCorpus:null" app/page.js
+          grep -q "Corpus YouTube" app/page.js
+          echo 'MAIN_MULTI_YOUTUBE_UI_OK'
+      - name: Commit integration when needed
+        run: |
+          if git diff --quiet; then
+            echo 'MAIN_MULTI_YOUTUBE_ALREADY_APPLIED'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/page.js
+          git commit -m 'Integrate multi-YouTube corpus into main workspace'
+          git push origin HEAD:integrate-youtube-corpus-main
