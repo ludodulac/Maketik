@@ -21,7 +21,7 @@ const youtubes=[
 const uid=()=>globalThis.crypto?.randomUUID?.()||String(Date.now()+Math.random());
 const initialProject=()=>({
   id:'gain-fric-v1',name:'Gain fric',universe:'bird',character:'bec',tiktoks,youtubes,youtube:youtubes[0],
-  status:'sources_ready',inspection:null,youtubeCorpus:null,transcript:null,tiktokEvidence:{},scripts:[],editorialProfile:null,lastGeneration:null,characterBible:null,audioExports:[]
+  status:'sources_ready',inspection:null,youtubeCorpus:null,transcript:null,tiktokEvidence:{},scripts:[],editorialProfile:null,lastGeneration:null,characterBible:null,audioExports:[],visualPlan:null,visualPack:null
 });
 
 function ScriptFacts({script}){
@@ -44,6 +44,8 @@ export default function GainFricPage(){
   const [inspecting,setInspecting]=useState(false);
   const [generating,setGenerating]=useState(false);
   const [audioBusyId,setAudioBusyId]=useState(null);
+  const [visualBusy,setVisualBusy]=useState(false);
+  const [packBusy,setPackBusy]=useState(false);
   useEffect(()=>{try{const saved=localStorage.getItem('maketik-gain-fric-project');if(saved)setProject({...initialProject(),...JSON.parse(saved)})}catch{}},[]);
   useEffect(()=>{try{localStorage.setItem('maketik-gain-fric-project',JSON.stringify(project))}catch{}},[project]);
   const updateProject=(id,patch)=>setProject(current=>current.id===id?{...current,...patch,updatedAt:new Date().toISOString()}:current);
@@ -61,7 +63,7 @@ export default function GainFricPage(){
     if(!project.transcript?.text||generating)return;setGenerating(true);setNotice('');
     try{
       const refs=(project.inspection?.tiktoks||project.tiktoks.map(url=>({url}))).map(x=>({url:x.url,title:x.title,description:x.description,author:x.author,evidence:project.tiktokEvidence?.[x.url]||null}));
-      const r=await fetch('/api/generate-scripts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectName:project.name,universe:'Oiseau enquêteur',character:'Bec',references:refs,transcript:project.transcript.text})});
+      const r=await fetch('/api/generate-scripts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectName:project.name,universe:'Oiseau enquêteur',character:'Bec',references:refs,transcript:project.transcript.text,youtubeCorpus:project.youtubeCorpus})});
       const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||'Génération impossible');
       const scripts=mergeGeneratedScripts(project.scripts,data.scripts,data,uid);
       updateProject(project.id,{scripts,editorialProfile:data.editorialProfile,lastGeneration:{provider:data.provider,model:data.model,generationMode:data.generationMode,limitations:data.limitations,factualSourceCount:data.factualSourceCount,generatedAt:data.generatedAt},status:'scripts_ready'});
@@ -73,12 +75,12 @@ export default function GainFricPage(){
     if(!target)return;
     if(status==='validated'){
       const provenance=scriptFactProvenanceStatus(target);
-      if(!provenance.canValidate){
-        setNotice(`Validation bloquée : ${provenance.reason}`);
-        return;
-      }
+      if(!provenance.canValidate){setNotice(`Validation bloquée : ${provenance.reason}`);return;}
     }
-    updateProject(project.id,{scripts:(project.scripts||[]).map(s=>s.id===id?{...s,status,validatedAt:status==='validated'?new Date().toISOString():s.validatedAt}:s)});
+    const patch={scripts:(project.scripts||[]).map(s=>s.id===id?{...s,status,validatedAt:status==='validated'?new Date().toISOString():s.validatedAt}:s)};
+    if(status!=='validated'&&project.visualPlan?.scriptId===id)patch.visualPlan={...project.visualPlan,stale:true,status:'proposed'};
+    if(status!=='validated'&&project.visualPack?.script?.id===id)patch.visualPack=null;
+    updateProject(project.id,patch);
   }
   async function exportAudio(script){
     if(script.status!=='validated'||audioBusyId)return;
@@ -89,13 +91,41 @@ export default function GainFricPage(){
       const blob=await r.blob();
       if(blob.type!=='audio/mpeg'||blob.size<1000)throw new Error('Le fournisseur n’a pas renvoyé un MP3 valide.');
       const filename=filenameFromDisposition(r.headers.get('content-disposition'),`maketik-gain-fric-${script.id}.mp3`);
-      const href=URL.createObjectURL(blob);
-      const a=document.createElement('a');a.href=href;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(href),1000);
+      const href=URL.createObjectURL(blob);const a=document.createElement('a');a.href=href;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(href),1000);
       const record={scriptId:script.id,filename,bytes:blob.size,provider:r.headers.get('x-maketik-audio-provider')||'unknown',voice:r.headers.get('x-maketik-audio-voice')||null,stability:r.headers.get('x-maketik-audio-stability')||null,exportedAt:new Date().toISOString()};
       updateProject(project.id,{audioExports:[...(project.audioExports||[]).filter(item=>item.scriptId!==script.id),record]});
       setNotice(`Narration MP3 créée · ${Math.round(blob.size/1024)} Ko · ${record.voice||record.provider}.`);
     }catch(error){setNotice(`${error.message}. Le script validé reste intact.`)}finally{setAudioBusyId(null)}
   }
+  async function generateVisualPlan(script){
+    if(visualBusy||script.status!=='validated')return;
+    if(project.visualPlan?.status==='validated'&&!project.visualPlan?.stale){setNotice('Le plan visuel actuel est validé : retire sa validation avant de le régénérer.');return;}
+    if(project.characterBible?.status!=='validated'){setNotice('Valide d’abord la bible personnage de Bec.');return;}
+    setVisualBusy(true);setNotice('');
+    try{
+      const r=await fetch('/api/generate-visual-plan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({universe:'Oiseau enquêteur',character:'Bec',script,characterBible:project.characterBible})});
+      const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||'Plan visuel impossible');
+      updateProject(project.id,{visualPlan:{...data,status:'proposed',stale:false},visualPack:null,status:'visual_plan_ready'});
+      setNotice(`Plan visuel créé : ${data.shots?.length||0} scènes liées au script validé.`);
+    }catch(error){setNotice(error.message)}finally{setVisualBusy(false)}
+  }
+  function setVisualPlanStatus(status){
+    const plan=project.visualPlan;if(!plan)return;
+    if(status==='validated'&&plan.stale){setNotice('Un plan obsolète ne peut pas être validé.');return;}
+    updateProject(project.id,{visualPlan:{...plan,status,validatedAt:status==='validated'?new Date().toISOString():plan.validatedAt},visualPack:status==='validated'?project.visualPack:null,status:status==='validated'?'visual_plan_validated':'visual_plan_ready'});
+  }
+  async function prepareVisualPack(script){
+    if(packBusy)return;
+    if(script.status!=='validated'||project.characterBible?.status!=='validated'||project.visualPlan?.status!=='validated'||project.visualPlan?.stale){setNotice('Script, bible et plan visuel doivent être validés avant de préparer les dessins.');return;}
+    setPackBusy(true);setNotice('');
+    try{
+      const r=await fetch('/api/prepare-conversation-visual-pack',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({project:{name:project.name,character:{name:'Bec'}},script,characterBible:project.characterBible,visualPlan:project.visualPlan})});
+      const data=await r.json();if(!r.ok||!data.pack)throw new Error(data.error||'Pack visuel impossible');
+      updateProject(project.id,{visualPack:{...data.pack,preparedAt:data.preparedAt},status:'drawings_ready_to_generate'});
+      setNotice(`Pack dessins prêt : ${data.pack.shots?.length||1} prompts de scènes, aucune image faussement déclarée générée.`);
+    }catch(error){setNotice(error.message)}finally{setPackBusy(false)}
+  }
+  const planScript=(project.scripts||[]).find(script=>script.id===project.visualPlan?.scriptId);
   return <main>
     <header><div className="brand">MAKE<span>TIK</span></div><div className="tag">projet réel · Gain fric</div></header>
     <div className="projectPage">
@@ -109,7 +139,9 @@ export default function GainFricPage(){
       </div>
       {project.inspection?.tiktoks?.some(source=>source?.ok)&&<TikTokReferenceWorkspace project={project} updateProject={updateProject} setNotice={setNotice}/>} 
       <CharacterBibleWorkspace project={project} universeName="Oiseau enquêteur" characterName="Bec" updateProject={updateProject} setNotice={setNotice}/>
-      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=>{const provenance=scriptFactProvenanceStatus(s);const audio=(project.audioExports||[]).find(item=>item.scriptId===s.id);return <article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div><ScriptFacts script={s}/><div className="inlineActions">{s.status==='validated'?<><button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button><button className="primary" onClick={()=>exportAudio(s)} disabled={audioBusyId===s.id}>{audioBusyId===s.id?'Narration…':'↓ Générer la narration MP3'}</button></>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')} disabled={!provenance.canValidate}>✓ Valider ce script</button>}{!provenance.canValidate&&<small className="blockHint">{provenance.reason}</small>}{audio&&<small>Dernier MP3 : {Math.round(audio.bytes/1024)} Ko · {audio.voice||audio.provider} · fournisseur {audio.stability||'non précisé'}</small>}</div></article>})}</div>}
+      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=>{const provenance=scriptFactProvenanceStatus(s);const audio=(project.audioExports||[]).find(item=>item.scriptId===s.id);const ownsPlan=project.visualPlan?.scriptId===s.id;return <article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div><ScriptFacts script={s}/><div className="inlineActions">{s.status==='validated'?<><button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button><button className="primary" onClick={()=>exportAudio(s)} disabled={audioBusyId===s.id}>{audioBusyId===s.id?'Narration…':'↓ Générer la narration MP3'}</button><button className="primary" onClick={()=>generateVisualPlan(s)} disabled={visualBusy||project.characterBible?.status!=='validated'||(ownsPlan&&project.visualPlan?.status==='validated'&&!project.visualPlan?.stale)}>{visualBusy?'Plan…':ownsPlan?'Régénérer le plan visuel':'Créer le plan visuel'}</button></>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')} disabled={!provenance.canValidate}>✓ Valider ce script</button>}{!provenance.canValidate&&<small className="blockHint">{provenance.reason}</small>}{audio&&<small>Dernier MP3 : {Math.round(audio.bytes/1024)} Ko · {audio.voice||audio.provider} · fournisseur {audio.stability||'non précisé'}</small>}</div></article>})}</div>}
+      {project.visualPlan&&<section className="panel"><h2>4. Plan visuel Gain fric</h2><p>{project.visualPlan.shots?.length||0} scènes · script {project.visualPlan.scriptId||'inconnu'} · {project.visualPlan.stale?'obsolète':'actif'}.</p><ol>{(project.visualPlan.shots||[]).map(shot=><li key={shot.order}><b>Plan {shot.order} · {shot.purpose}</b><br/><span>{shot.narrationExcerpt}</span><br/><small>{shot.visualNeed}</small>{shot.documentaryReference&&<><br/><small>Appui factuel : {shot.documentaryReference}</small></>}</li>)}</ol><div className="inlineActions">{project.visualPlan.status==='validated'?<button onClick={()=>setVisualPlanStatus('proposed')}>Retirer la validation du plan</button>:<button className="primary" onClick={()=>setVisualPlanStatus('validated')} disabled={project.visualPlan.stale}>✓ Valider le plan visuel</button>}{project.visualPlan.status==='validated'&&planScript&&<button className="primary" onClick={()=>prepareVisualPack(planScript)} disabled={packBusy}>{packBusy?'Préparation…':'Préparer les dessins'}</button>}</div></section>}
+      {project.visualPack&&<section className="panel"><h2>5. Pack dessins prêt pour la conversation</h2><p>{project.visualPack.shots?.length||1} scènes préparées. Maketik prépare les prompts ; les images ne sont pas encore générées.</p>{(project.visualPack.shots||[]).map(shot=><details key={shot.order}><summary>Plan {shot.order} · {shot.purpose||'illustration'}</summary><pre style={{whiteSpace:'pre-wrap'}}>{shot.prompt}</pre></details>)}</section>}
     </div>
   </main>;
 }
