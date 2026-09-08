@@ -10,6 +10,8 @@ on:
       - 'app/components/CharacterBibleWorkspace.js'
       - 'app/api/transcribe-youtube/route.js'
       - 'app/api/generate-scripts/route.js'
+      - 'lib/youtube-corpus-state.mjs'
+      - 'scripts/probe-gain-fric.mjs'
       - '.github/workflows/gain-fric-project.yml'
   workflow_dispatch:
 
@@ -23,6 +25,19 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm run build
+      - name: Verify manual transcript survives provider retry
+        run: |
+          node --input-type=module - <<'NODE'
+          import {mergeCorpusPreservingManual} from './lib/youtube-corpus-state.mjs';
+          const url='https://youtu.be/manual-source';
+          const previous={version:'youtube-corpus-v1',sources:[{index:1,url,status:'ready',provider:'manual',text:'Texte humain validé pour la source.',wordCount:6}]};
+          const incoming={version:'youtube-corpus-v1',sources:[{index:1,url,status:'unavailable',provider:null,text:'',wordCount:0,error:'Provider blocked'}]};
+          const merged=mergeCorpusPreservingManual(previous,incoming);
+          const source=merged.sources[0];
+          if(source.provider!=='manual'||source.status!=='ready'||source.text!=='Texte humain validé pour la source.') throw new Error('Manual transcript was overwritten');
+          if(merged.readyCount!==1||merged.unavailableCount!==0||!merged.text.includes('Texte humain validé')) throw new Error('Rebuilt corpus lost the manual source');
+          console.log('MANUAL_YOUTUBE_TRANSCRIPT_PRESERVED');
+          NODE
       - name: Start Maketik
         run: |
           npm run start -- --hostname 127.0.0.1 --port 3000 >/tmp/maketik.log 2>&1 &
@@ -34,12 +49,17 @@ jobs:
           grep -q 'Gain fric' /tmp/gain-fric.html
           grep -q 'PREMIER PROJET RÉEL' /tmp/gain-fric.html
           echo 'GAIN_FRIC_PROJECT_ROUTE_OK'
-      - name: Verify factual gate stays closed on blocked real sources
+      - name: Probe the four real factual sources without inventing availability
         run: |
           node scripts/probe-gain-fric.mjs | tee /tmp/probe.log
-          grep -q 'GAIN_FRIC_CORPUS sources=4 ready=0 unavailable=4 words=0' /tmp/probe.log
-          grep -q 'GAIN_FRIC_MANUAL_FALLBACK_REQUIRED all_sources_unavailable=true' /tmp/probe.log
-          echo 'GAIN_FRIC_FACTUAL_GATE_OK'
+          grep -q 'GAIN_FRIC_CORPUS sources=4' /tmp/probe.log
+          test "$(grep -c '^GAIN_FRIC_SOURCE ' /tmp/probe.log)" -eq 4
+          if grep -q 'GAIN_FRIC_MANUAL_FALLBACK_REQUIRED' /tmp/probe.log; then
+            echo 'GAIN_FRIC_FACTUAL_GATE_CLOSED_HONESTLY'
+          else
+            grep -q 'GAIN_FRIC_FACTUAL_CORPUS_AVAILABLE' /tmp/probe.log
+            echo 'GAIN_FRIC_FACTUAL_GATE_OPEN_WITH_REAL_TRANSCRIPT'
+          fi
       - name: Stop Maketik
         if: always()
         run: kill $(cat /tmp/maketik.pid) 2>/dev/null || true
