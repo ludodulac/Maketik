@@ -1,0 +1,68 @@
+name: Probe Gain fric real YouTube corpus
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gain-fric-corpus.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: Start Maketik
+        run: |
+          npm run start -- --hostname 127.0.0.1 --port 3000 >/tmp/maketik.log 2>&1 &
+          echo $! >/tmp/maketik.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3000 >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/maketik.log
+          exit 1
+      - name: Probe the four real Gain fric sources
+        shell: bash
+        run: |
+          cat >/tmp/payload.json <<'JSON'
+          {
+            "urls": [
+              "https://youtu.be/b1m_6km44JQ?is=p4LLagtOGx3C7kMl",
+              "https://youtu.be/horkXy4kMro?is=lbNvJhFt07ZzQJIt",
+              "https://youtu.be/xnCHNrVrTTs?is=xvwnCm4VstM5Ns85",
+              "https://youtu.be/e9M0bLmRQC0?is=Ksbr7odmymsRyMaC"
+            ]
+          }
+          HTTP=$(curl --silent --show-error --max-time 120 \
+            -o /tmp/corpus.json \
+            -w '%{http_code}' \
+            http://127.0.0.1:3000/api/transcribe-youtube \
+            -H 'content-type: application/json' \
+            --data @/tmp/payload.json)
+          HTTP="$HTTP" node - <<'NODE'
+          const fs=require('fs');
+          const http=Number(process.env.HTTP);
+          const body=JSON.parse(fs.readFileSync('/tmp/corpus.json','utf8'));
+          const corpus=body.corpus||{};
+          console.log(`GAIN_FRIC_HTTP status=${http}`);
+          console.log(`GAIN_FRIC_CORPUS sources=${corpus.sourceCount||0} ready=${corpus.readyCount||0} unavailable=${corpus.unavailableCount||0} words=${corpus.wordCount||0}`);
+          for(const source of corpus.sources||[]){
+            const id=(source.url.match(/youtu\.be\/([^?]+)/)||[])[1]||source.url;
+            console.log(`GAIN_FRIC_SOURCE id=${id} status=${source.status} words=${source.wordCount||0} provider=${source.provider||'none'} error=${source.error||'none'} detail=${source.detail||'none'}`);
+          }
+          if((corpus.sourceCount||0)!==4) throw new Error('Expected four sources in corpus response');
+          if((corpus.readyCount||0)===0){
+            console.log('GAIN_FRIC_MANUAL_FALLBACK_REQUIRED all_sources_unavailable=true');
+          } else {
+            console.log('GAIN_FRIC_FACTUAL_CORPUS_AVAILABLE');
+          }
+          NODE
+      - name: Stop Maketik
+        if: always()
+        run: kill $(cat /tmp/maketik.pid) 2>/dev/null || true
