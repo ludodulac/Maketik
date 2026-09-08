@@ -1,0 +1,134 @@
+name: Verify Maketik TikTok references
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/api/inspect-source/route.js'
+      - 'app/api/prepare-tiktok-reference/route.js'
+      - 'app/api/generate-scripts/route.js'
+      - 'app/components/TikTokReferenceWorkspace.js'
+      - 'app/page.js'
+      - 'lib/tiktok-reference.mjs'
+      - '.github/workflows/tiktok-reference.yml'
+  pull_request:
+    paths:
+      - 'app/api/inspect-source/route.js'
+      - 'app/api/prepare-tiktok-reference/route.js'
+      - 'app/api/generate-scripts/route.js'
+      - 'app/components/TikTokReferenceWorkspace.js'
+      - 'app/page.js'
+      - 'lib/tiktok-reference.mjs'
+      - '.github/workflows/tiktok-reference.yml'
+
+jobs:
+  tiktok-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Start production server
+        run: |
+          npm start > /tmp/maketik-tiktok.log 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/maketik-tiktok.log
+          exit 1
+      - name: Inspect a real public TikTok without inventing a transcript
+        run: |
+          TIKTOK_URL='https://www.tiktok.com/@scout2015/video/6718335390845095173'
+          STATUS=$(curl --silent --show-error --max-time 20 \
+            -o /tmp/tiktok-inspect.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/inspect-source \
+            -H 'content-type: application/json' \
+            --data "{\"url\":\"$TIKTOK_URL\"}")
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/tiktok-inspect.json');
+          const status=Number(process.env.STATUS);
+          if(status!==200||!data.ok||data.kind!=='tiktok') throw new Error(`TikTok inspection failed HTTP ${status}: ${data.error||'invalid response'}`);
+          if(!data.description||data.metadata?.provider!=='tiktok-oembed') throw new Error('TikTok oEmbed description/provenance missing');
+          if(data.transcript?.status!=='unavailable'||!/pas une transcription/i.test(data.transcript?.reason||'')) throw new Error('TikTok metadata is being confused with a transcript');
+          console.log(`TIKTOK_OEMBED_OK id=${data.sourceId||'unknown'} author=${data.author||'unknown'}`);
+          NODE
+      - name: Prepare metadata-only TikTok evidence
+        run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const source=JSON.parse(fs.readFileSync('/tmp/tiktok-inspect.json','utf8'));
+          fs.writeFileSync('/tmp/tiktok-metadata-request.json',JSON.stringify({source}));
+          NODE
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/tiktok-metadata.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/prepare-tiktok-reference \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/tiktok-metadata-request.json)
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/tiktok-metadata.json');
+          const status=Number(process.env.STATUS);
+          if(status!==200||!data.ok) throw new Error(`Metadata-only evidence failed HTTP ${status}`);
+          const e=data.evidence;
+          if(e.evidenceStatus!=='metadata-only'||e.spokenText!==null||e.factualUse!=='forbidden') throw new Error('Metadata-only TikTok evidence has incorrect truth labels');
+          if(e.captionProvenance?.status!=='metadata-description') throw new Error('Caption provenance missing');
+          console.log('TIKTOK_METADATA_ONLY_OK');
+          NODE
+      - name: Prepare manual spoken TikTok evidence
+        run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const source=JSON.parse(fs.readFileSync('/tmp/tiktok-inspect.json','utf8'));
+          const manualTranscript='MARQUEUR_TIKTOK_INTERDIT. Tu crois connaître cette histoire ? Pourtant le détail important arrive seulement maintenant. Regarde bien la progression. Une question ouvre le récit, puis les phrases restent courtes. Enfin, la conclusion revient sur la promesse de départ !';
+          fs.writeFileSync('/tmp/tiktok-manual-request.json',JSON.stringify({source,manualTranscript}));
+          NODE
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/tiktok-manual.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/prepare-tiktok-reference \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/tiktok-manual-request.json)
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/tiktok-manual.json');
+          const status=Number(process.env.STATUS);
+          if(status!==200||!data.ok) throw new Error(`Manual TikTok evidence failed HTTP ${status}`);
+          const e=data.evidence;
+          if(e.evidenceStatus!=='manual-spoken-text'||e.spokenTextProvenance?.provider!=='manual'||e.factualUse!=='forbidden') throw new Error('Manual TikTok provenance is incorrect');
+          if(!e.editorialMetrics||e.editorialMetrics.wordCount<20) throw new Error('Editorial metrics missing');
+          console.log(`TIKTOK_MANUAL_EVIDENCE_OK words=${e.editorialMetrics.wordCount}`);
+          NODE
+      - name: Keep TikTok evidence out of factual local drafts
+        run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const source=JSON.parse(fs.readFileSync('/tmp/tiktok-inspect.json','utf8'));
+          const evidence=JSON.parse(fs.readFileSync('/tmp/tiktok-manual.json','utf8')).evidence;
+          const transcript='Un trou noir est une région de l’espace où la gravité est extrêmement forte. Certains trous noirs se forment après l’effondrement d’étoiles massives. Ils peuvent attirer de la matière autour d’eux. Cette matière peut chauffer fortement avant de franchir l’horizon des événements. Les astronomes observent alors le rayonnement de la matière environnante. Les trous noirs supermassifs occupent le centre de nombreuses galaxies. Leur masse peut atteindre des millions ou des milliards de masses solaires. Leur origine exacte reste une question de recherche. Les observations combinent plusieurs instruments et plusieurs longueurs d’onde. Les modèles scientifiques sont comparés aux mesures. Les résultats permettent de mieux comprendre l’évolution des galaxies. La recherche continue avec de nouveaux télescopes et de nouvelles données.';
+          fs.writeFileSync('/tmp/tiktok-generation-request.json',JSON.stringify({projectName:'CI TikTok separation',universe:'Oiseau enquêteur',character:'Bec',references:[{url:source.url,title:source.title,description:source.description,author:source.author,evidence}],transcript}));
+          NODE
+          STATUS=$(curl --silent --show-error --max-time 15 \
+            -o /tmp/tiktok-generation.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-scripts \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/tiktok-generation-request.json)
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/tiktok-generation.json');
+          const status=Number(process.env.STATUS);
+          if(status!==200||!data.ok||data.generationMode!=='fallback') throw new Error(`Local generation failed HTTP ${status}`);
+          if(data.referenceEvidenceCount!==1) throw new Error('Prepared TikTok evidence was not acknowledged');
+          const serialized=JSON.stringify(data.scripts);
+          if(serialized.includes('MARQUEUR_TIKTOK_INTERDIT')) throw new Error('TikTok-only content leaked into factual local drafts');
+          if(!/ne sont pas interprétées stylistiquement/i.test(data.limitations||'')) throw new Error('Fallback TikTok limitation is missing');
+          console.log(`TIKTOK_FACTUAL_SEPARATION_OK drafts=${data.scripts.length}`);
+          NODE
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik-tiktok.log || true
