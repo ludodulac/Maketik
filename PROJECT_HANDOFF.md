@@ -391,3 +391,37 @@ Après le PDF, la prochaine amélioration qui rapproche le plus d’un paquet pr
 Pour la voix : chercher et tester une voix française masculine naturelle, gratuite ou quasi gratuite ; vérifier maintenance actuelle, licence/conditions, export de fichier, stabilité et comportement réel depuis GitHub. Le fournisseur doit rester interchangeable et son indisponibilité ne doit jamais effacer le script validé ni bloquer l’export PDF.
 
 Ensuite seulement : transcription TikTok plus robuste, puis bible visuelle/personnage canonique et pipeline d’illustrations cohérentes.
+
+## 18. PRIORITÉ ACTIVE — TikTok avant nouvel élargissement visuel
+
+> Cette section supersède toute formulation antérieure laissant entendre que les illustrations sont la prochaine action immédiate.
+
+### État réellement atteint depuis la section 17
+
+Depuis la dernière mise à jour, Maketik dispose aussi de :
+- un vrai export MP3 français pour un script validé, via un fournisseur Edge Read Aloud explicitement marqué expérimental ;
+- un plan visuel structurel lié à un script validé, avec protection contre l’écrasement et statut obsolète si le script source perd sa validation ;
+- des cibles documentaires issues d’un plan visuel validé ;
+- une vérification HTTP côté serveur des URLs documentaires avec blocage des destinations locales/privées ;
+- une recherche réelle de candidats Wikimedia Commons, conservés comme `candidate-unverified` ;
+- une interface de validation documentaire qui distingue candidat trouvé, URL vérifiée et validation humaine, et lie chaque validation au `scriptId` + `visualPlanGeneratedAt` du plan actif.
+
+Ces briques visuelles existent et doivent être préservées, mais **le pipeline visuel est maintenant gelé à ce niveau**. Ne pas ajouter de génération d’illustrations, de moteur d’images, de character sheet ou de nouvel export visuel avant d’avoir traité la priorité TikTok ci-dessous. Une dépendance `sharp` brièvement ajoutée pour préparer un export PNG a été retirée avant toute intégration afin de respecter ce gel.
+
+### Décision de priorité
+
+La priorité active redevient **TikTok**, conformément à l’ordre déjà prévu dans la section 17 : audio réel d’abord, puis transcription/références TikTok plus robustes, puis seulement bible visuelle et illustrations.
+
+Objectif de la prochaine tranche TikTok :
+1. conserver la vérification oEmbed réelle de chaque URL TikTok ;
+2. distinguer explicitement description/caption TikTok, métadonnées, contenu parlé et transcription ;
+3. tenter une récupération de texte réellement disponible par des surfaces TikTok supportées sans prétendre qu’une description est une transcription ;
+4. s’il n’existe pas de transcription publique exploitable pour un simple lien, fournir un fallback manuel **par TikTok** avec provenance ;
+5. utiliser uniquement ce contenu TikTok pour dériver des mécanismes éditoriaux de haut niveau, jamais pour copier ou imiter un créateur identifiable ;
+6. tester le chemin réel en GitHub Actions et garder les erreurs explicites.
+
+Les docs TikTok vérifiées le 2026-09-08 confirment l’existence de l’oEmbed/Embed Player et d’APIs nécessitant enregistrement, scopes et/ou autorisation ; elles ne fournissent pas une API publique de transcription pour un simple lien vidéo. Ne pas inventer cette capacité.
+
+### Prochaine action autoritaire
+
+**Ne pas élargir davantage le visuel.** Fermer d’abord la boucle TikTok honnête : `URL TikTok → métadonnée/description réellement disponible → transcription réelle si une voie vérifiée existe OU fallback manuel explicite par référence → dérivation éditoriale traçable`. Une fois cette tranche testée, réévaluer la priorité suivante et mettre ce handoff à jour avant de reprendre les illustrations.
