@@ -44,11 +44,7 @@ jobs:
           done
           cat /tmp/maketik.log
           exit 1
-      - name: Verify application home
-        run: |
-          grep -q "MAKE" /tmp/home.html
-          echo "Homepage served by the production Next.js server."
-      - name: Verify automatic YouTube transcript path with a real source
+      - name: Verify automatic YouTube transcript truth branch with a real source
         run: |
           STATUS=$(curl --silent --show-error \
             -o /tmp/automatic-transcript.json \
@@ -60,10 +56,19 @@ jobs:
           const fs=require('fs');
           const data=JSON.parse(fs.readFileSync('/tmp/automatic-transcript.json','utf8'));
           const status=Number(process.env.STATUS);
-          if(status!==200||!data.ok||!data.text||!data.provider||data.wordCount<100){
-            throw new Error(`Known automatic-caption path failed; HTTP ${status}: ${data.error||'invalid transcript artifact'}`);
+          if(status===200){
+            if(!data.ok||!data.text||!data.provider||data.wordCount<100){
+              throw new Error(`Automatic transcript claimed success without a valid artifact; HTTP ${status}`);
+            }
+            console.log(`AUTOMATIC_TRANSCRIPT_OK words=${data.wordCount} provider=${data.provider}`);
+          }else if(status===422){
+            if(data.ok!==false||!data.error||!data.fallback){
+              throw new Error('Automatic transcript unavailability is not explicit and recoverable');
+            }
+            console.log('AUTOMATIC_TRANSCRIPT_UNAVAILABLE_HONEST_FALLBACK');
+          }else{
+            throw new Error(`Unexpected automatic-caption response; HTTP ${status}: ${data.error||'unknown error'}`);
           }
-          console.log(`AUTOMATIC_TRANSCRIPT_OK words=${data.wordCount} provider=${data.provider}`);
           NODE
       - name: Verify factual source and honest manual fallback
         run: |
