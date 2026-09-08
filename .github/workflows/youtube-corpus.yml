@@ -1,0 +1,38 @@
+name: Verify Maketik YouTube corpus
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/youtube-corpus.mjs'
+      - 'app/api/transcribe-youtube/route.js'
+      - '.github/workflows/youtube-corpus.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: Verify corpus truth boundaries
+        run: |
+          node --input-type=module <<'NODE'
+          import { buildYoutubeCorpus, normalizeYoutubeUrls } from './lib/youtube-corpus.mjs';
+          const urls=normalizeYoutubeUrls(['https://youtu.be/a','https://youtu.be/b','https://youtu.be/a']);
+          if(urls.length!==2) throw new Error('URL dedupe failed');
+          const corpus=buildYoutubeCorpus([
+            {ok:true,url:urls[0],provider:'youtube-captions',text:'fait réel source alpha avec suffisamment de mots',wordCount:8,capturedAt:'2026-09-08T00:00:00Z'},
+            {ok:false,url:urls[1],error:'captions blocked'}
+          ]);
+          if(corpus.sourceCount!==2||corpus.readyCount!==1||corpus.unavailableCount!==1) throw new Error('Corpus counts wrong');
+          if(!corpus.text.includes('fait réel source alpha')) throw new Error('Ready source missing');
+          if(corpus.text.includes('captions blocked')) throw new Error('Unavailable source leaked into factual corpus');
+          if(corpus.sources[1].status!=='unavailable') throw new Error('Unavailable source not explicit');
+          console.log(`YOUTUBE_CORPUS_OK sources=${corpus.sourceCount} ready=${corpus.readyCount} unavailable=${corpus.unavailableCount}`);
+          console.log('UNAVAILABLE_SOURCE_EXCLUDED_FROM_FACTS');
+          NODE
