@@ -1,0 +1,59 @@
+name: Probe Maketik image provider
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/image-provider-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  image-provider-probe:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check supported image provider secret
+        id: provider
+        shell: bash
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "IMAGE_PROVIDER_SECRET_AVAILABLE provider=openai"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "IMAGE_PROVIDER_BLOCKED missing=OPENAI_API_KEY"
+          fi
+      - name: Probe one real GPT-Image-2 generation
+        if: steps.provider.outputs.available == 'true'
+        shell: bash
+        run: |
+          HTTP=$(curl --silent --show-error --max-time 120 \
+            -o /tmp/image-response.json \
+            -w '%{http_code}' \
+            https://api.openai.com/v1/images/generations \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H 'Content-Type: application/json' \
+            --data '{"model":"gpt-image-2","prompt":"A simple original editorial character study of a small curious bird investigator, clean economical line art, neutral background, no text, no logos, no imitation of any named artist or existing character.","size":"1024x1024","quality":"low","output_format":"png","n":1}')
+          HTTP="$HTTP" node - <<'NODE'
+          const fs=require('fs');
+          const http=Number(process.env.HTTP);
+          const body=JSON.parse(fs.readFileSync('/tmp/image-response.json','utf8'));
+          if(http!==200){
+            const message=body?.error?.message || `HTTP ${http}`;
+            throw new Error(`Image provider probe failed: ${message}`);
+          }
+          const b64=body?.data?.[0]?.b64_json;
+          if(!b64) throw new Error('Image provider returned no base64 image');
+          const bytes=Buffer.from(b64,'base64');
+          if(bytes.length<1000) throw new Error(`Generated PNG too small: ${bytes.length}`);
+          if(bytes[0]!==0x89||bytes[1]!==0x50||bytes[2]!==0x4e||bytes[3]!==0x47) throw new Error('Generated artifact is not PNG');
+          fs.writeFileSync('/tmp/maketik-image-probe.png',bytes);
+          console.log(`IMAGE_PROVIDER_REAL_PNG_OK provider=openai model=gpt-image-2 bytes=${bytes.length}`);
+          NODE
+      - name: Record honest blocked state
+        if: steps.provider.outputs.available != 'true'
+        run: |
+          echo 'No supported image-provider secret is available to this workflow.'
+          echo 'No image generation was attempted and no visual capability is claimed.'
