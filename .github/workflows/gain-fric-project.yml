@@ -10,8 +10,12 @@ on:
       - 'app/components/CharacterBibleWorkspace.js'
       - 'app/api/transcribe-youtube/route.js'
       - 'app/api/generate-scripts/route.js'
+      - 'app/api/generate-visual-plan/route.js'
+      - 'app/api/prepare-conversation-visual-pack/route.js'
       - 'lib/youtube-corpus-state.mjs'
       - 'lib/script-factual-sources.mjs'
+      - 'lib/visual-plan.mjs'
+      - 'lib/conversation-visual-pack.mjs'
       - 'scripts/probe-gain-fric.mjs'
       - '.github/workflows/gain-fric-project.yml'
   workflow_dispatch:
@@ -80,6 +84,28 @@ jobs:
           if(!facts.length||facts.some(fact=>!fact.provenanceVerified)) throw new Error('Unverified local fact provenance');
           if(!facts.some(fact=>fact.sourceUrl==='https://youtu.be/source-a')||!facts.some(fact=>fact.sourceUrl==='https://youtu.be/source-b')) throw new Error('One factual source disappeared from script provenance');
           console.log(`GAIN_FRIC_SCRIPT_PROVENANCE_OK scripts=${body.scripts.length} facts=${facts.length} sources=${body.factualSourceCount}`);
+          NODE
+      - name: Verify validated script reaches complete drawing pack
+        run: |
+          node --input-type=module - <<'NODE'
+          const script={
+            id:'gain-fric-fixture',status:'validated',validatedAt:'2026-09-09T00:00:00Z',title:'Astuce test',
+            script:'Tu peux économiser sur une dépense simple. Commence par comparer les offres réellement disponibles. Vérifie ensuite les conditions avant de choisir. Un petit écart répété peut devenir une économie visible. Garde enfin une trace du résultat pour savoir si la méthode vaut vraiment le coup.',
+            sourceFacts:['Comparer les offres permet de distinguer les options.'],
+            sourceFactsDetailed:[{text:'Comparer les offres permet de distinguer les options.',sourceLabel:'SOURCE YOUTUBE 1',sourceUrl:'https://youtu.be/source-a',sourceExcerpt:'Comparer les offres permet de distinguer les options.',provenanceVerified:true}]
+          };
+          const bible={status:'validated',version:'character-bible-v1',validatedAt:'2026-09-09T00:00:00Z',characterId:'bec',characterName:'Bec',identityAnchor:'petit oiseau enquêteur original',silhouette:'compacte',face:'bec court et yeux expressifs',proportions:'tête légèrement grande',clothing:'veste simple',recurringProps:'carnet',universeRule:'illustration claire et minimale',continuityRules:['même bec','même veste']};
+          const planResponse=await fetch('http://127.0.0.1:3000/api/generate-visual-plan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({universe:'Oiseau enquêteur',character:'Bec',script,characterBible:bible})});
+          const plan=await planResponse.json();
+          if(!planResponse.ok||!plan.ok||!Array.isArray(plan.shots)||plan.shots.length<4) throw new Error(`Visual plan failed: ${JSON.stringify(plan)}`);
+          const validatedPlan={...plan,status:'validated',stale:false,validatedAt:'2026-09-09T00:01:00Z'};
+          const packResponse=await fetch('http://127.0.0.1:3000/api/prepare-conversation-visual-pack',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({project:{name:'Gain fric',character:{name:'Bec'}},script,characterBible:bible,visualPlan:validatedPlan})});
+          const packBody=await packResponse.json();
+          const pack=packBody.pack;
+          if(!packResponse.ok||!pack||pack.generation!=='not-generated') throw new Error(`Drawing pack failed: ${JSON.stringify(packBody)}`);
+          if(pack.shots?.length!==plan.shots.length) throw new Error('Drawing pack lost visual shots');
+          if(pack.shots.some(shot=>!shot.prompt?.includes('Bec')||shot.generation!=='not-generated')) throw new Error('A drawing prompt lost canon or truth status');
+          console.log(`GAIN_FRIC_DRAWING_PACK_OK shots=${pack.shots.length} version=${pack.version}`);
           NODE
       - name: Probe the four real factual sources without inventing availability
         run: |
