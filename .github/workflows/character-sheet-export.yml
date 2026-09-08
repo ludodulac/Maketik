@@ -1,0 +1,81 @@
+name: Verify Maketik character sheet export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/api/export-character-sheet/route.js'
+      - 'app/components/CharacterBibleWorkspace.js'
+      - 'lib/vector-character-sheet.mjs'
+      - '.github/workflows/character-sheet-export.yml'
+  pull_request:
+    paths:
+      - 'app/api/export-character-sheet/route.js'
+      - 'app/components/CharacterBibleWorkspace.js'
+      - 'lib/vector-character-sheet.mjs'
+      - '.github/workflows/character-sheet-export.yml'
+
+jobs:
+  character-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Start production server
+        run: |
+          npm start > /tmp/maketik-character-sheet.log 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/maketik-character-sheet.log
+          exit 1
+      - name: Reject character sheet export for unvalidated bible
+        run: |
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/sheet-rejected.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/export-character-sheet \
+            -H 'content-type: application/json' \
+            --data '{"projectName":"CI Canon","characterBible":{"status":"proposed","version":"character-bible-v1","identityAnchor":"Ancre test"}}')
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/sheet-rejected.json');const status=Number(process.env.STATUS);
+          if(status!==409||data.ok!==false||!/bible personnage validée/i.test(data.error||'')) throw new Error(`Unvalidated sheet was not rejected; HTTP ${status}`);
+          console.log('UNVALIDATED_CHARACTER_SHEET_REJECTED');
+          NODE
+      - name: Export a real SVG bound to validated canon
+        run: |
+          cat > /tmp/sheet-request.json <<'JSON'
+          {"projectName":"CI Canon","characterBible":{"status":"validated","version":"character-bible-v1","mode":"local-structural-canon","characterId":"bec","characterName":"Bec","universeId":"bird","universeName":"Oiseau enquêteur","identityAnchor":"Petit enquêteur à bec très lisible, posture curieuse et regard précis.","silhouette":"Tête légèrement dominante, bec triangulaire, petit corps compact, jambes fines.","face":"Deux yeux simples.","proportions":"Tête 40 %, torse compact, membres courts.","clothing":"Tenue sobre d’enquêteur.","recurringProps":"Carnet ponctuel.","expressions":"Curieux, sceptique, surpris.","universeRule":"Silhouette forte, économie de ligne.","paletteGuidance":"Palette courte et stable.","continuityRules":["Ne pas changer la forme du bec.","Conserver la même identité visuelle d’un plan à l’autre.","Les accessoires contextuels peuvent varier.","Une référence documentaire ne redéfinit pas le personnage."],"validatedAt":"2026-09-08T05:00:00.000Z"}}
+          JSON
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -D /tmp/sheet-headers.txt \
+            -o /tmp/character-sheet.svg \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/export-character-sheet \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/sheet-request.json)
+          test "$STATUS" = "200"
+          grep -qi '^content-type: image/svg+xml' /tmp/sheet-headers.txt
+          grep -qi '^content-disposition: attachment;' /tmp/sheet-headers.txt
+          grep -qi '^x-maketik-visual-provider: local-vector-sheet' /tmp/sheet-headers.txt
+          grep -qi '^x-maketik-visual-mode: deterministic-canonical-preview' /tmp/sheet-headers.txt
+          grep -qi '^x-maketik-character-bible-version: character-bible-v1' /tmp/sheet-headers.txt
+          grep -qi '^x-maketik-character-bible-validated-at: 2026-09-08T05:00:00.000Z' /tmp/sheet-headers.txt
+          node - <<'NODE'
+          const fs=require('fs');const text=fs.readFileSync('/tmp/character-sheet.svg','utf8');const bytes=fs.statSync('/tmp/character-sheet.svg').size;
+          if(bytes<2500) throw new Error(`SVG too small: ${bytes}`);
+          if(!text.startsWith('<?xml')||!text.includes('<svg')||!text.includes('local-vector-sheet')) throw new Error('Invalid SVG artifact/provenance');
+          if(!text.includes('Bec')||!text.includes('character-bible-v1')||!text.includes('2026-09-08T05:00:00.000Z')) throw new Error('Canonical provenance missing inside SVG');
+          if(!text.includes('FACE')||!text.includes('PROFIL')||!text.includes('3/4')) throw new Error('Character sheet views missing');
+          console.log(`CANONICAL_CHARACTER_SHEET_SVG_OK bytes=${bytes}`);
+          NODE
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik-character-sheet.log || true
