@@ -6,14 +6,18 @@ export const runtime='nodejs';
 export async function POST(request){
   const body=await request.json().catch(()=>({}));
   const script=body.script||{};
+  const characterBible=body.characterBible||null;
   if(script.status!=='validated'){
     return NextResponse.json({ok:false,error:'Seul un script validé peut produire un plan visuel.'},{status:409});
+  }
+  if(characterBible?.status!=='validated'){
+    return NextResponse.json({ok:false,error:'Une bible personnage validée est nécessaire avant de produire un nouveau plan visuel.'},{status:409});
   }
   if(!String(script.script||'').trim()){
     return NextResponse.json({ok:false,error:'Le script validé est vide.'},{status:400});
   }
 
-  const local=buildLocalVisualPlan({script,universe:body.universe,character:body.character});
+  const local=buildLocalVisualPlan({script,universe:body.universe,character:body.character,characterBible});
   if(!local){
     return NextResponse.json({ok:false,code:'VISUAL_PLAN_INSUFFICIENT_SCRIPT',error:'Le script est trop court pour produire honnêtement un plan visuel exploitable.'},{status:422});
   }
@@ -21,6 +25,12 @@ export async function POST(request){
   return NextResponse.json({
     ok:true,
     scriptId:script.id||null,
+    characterBible:{
+      version:characterBible.version||null,
+      characterId:characterBible.characterId||null,
+      validatedAt:characterBible.validatedAt||null,
+      identityAnchor:characterBible.identityAnchor||null
+    },
     generatedAt:new Date().toISOString(),
     ...local
   });
