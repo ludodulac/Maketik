@@ -1,0 +1,68 @@
+name: Verify Maketik reference inspection
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/api/inspect-reference/**'
+      - '.github/workflows/reference-inspection.yml'
+
+jobs:
+  reference-inspection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Start production server
+        run: |
+          npm start > /tmp/maketik-inspection.log 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/maketik-inspection.log
+          exit 1
+      - name: Refuse local and private documentary URLs
+        run: |
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/private-reference.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/inspect-reference \
+            -H 'content-type: application/json' \
+            --data '{"url":"http://127.0.0.1:3000/"}')
+          test "$STATUS" = "422"
+          node - <<'NODE'
+          const data=require('/tmp/private-reference.json');
+          if(data.ok!==false||!data.detail||!/privée|locale/i.test(data.detail)) throw new Error('Private-address refusal is not explicit');
+          console.log('PRIVATE_REFERENCE_URL_REJECTED');
+          NODE
+      - name: Verify a real public documentary URL over HTTP
+        run: |
+          STATUS=$(curl --silent --show-error --max-time 15 \
+            -o /tmp/public-reference.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/inspect-reference \
+            -H 'content-type: application/json' \
+            --data '{"url":"https://example.com/"}')
+          test "$STATUS" = "200"
+          node - <<'NODE'
+          const data=require('/tmp/public-reference.json');
+          if(!data.ok||data.statusCode<200||data.statusCode>=300) throw new Error('Public URL was not verified');
+          if(data.finalUrl!=='https://example.com/'||!data.checkedAt) throw new Error('Reference provenance is incomplete');
+          if(!data.contentType||!data.provenance?.method||!data.provenance?.limitations) throw new Error('HTTP verification metadata is incomplete');
+          if(!/ne prouve pas/i.test(data.provenance.limitations)) throw new Error('Verification limitation must stay explicit');
+          console.log(`PUBLIC_REFERENCE_URL_OK type=${data.contentType} title=${data.title||'none'}`);
+          NODE
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik-inspection.log || true
