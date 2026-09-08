@@ -1,0 +1,134 @@
+name: Verify Maketik character bible
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/api/generate-character-bible/route.js'
+      - 'app/api/generate-visual-plan/route.js'
+      - 'app/components/CharacterBibleWorkspace.js'
+      - 'app/page.js'
+      - 'lib/character-bible.mjs'
+      - 'lib/visual-plan.mjs'
+      - '.github/workflows/character-bible.yml'
+  pull_request:
+    paths:
+      - 'app/api/generate-character-bible/route.js'
+      - 'app/api/generate-visual-plan/route.js'
+      - 'app/components/CharacterBibleWorkspace.js'
+      - 'app/page.js'
+      - 'lib/character-bible.mjs'
+      - 'lib/visual-plan.mjs'
+      - '.github/workflows/character-bible.yml'
+
+jobs:
+  character-bible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Start production server
+        run: |
+          npm start > /tmp/maketik-character.log 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/maketik-character.log
+          exit 1
+      - name: Generate a proposed canonical character bible
+        run: |
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/character-bible.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-character-bible \
+            -H 'content-type: application/json' \
+            --data '{"characterId":"bec","universeId":"bird","characterName":"Bec","universeName":"Oiseau enquêteur"}')
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/character-bible.json');
+          const status=Number(process.env.STATUS);
+          if(status!==200||!data.ok||!data.bible) throw new Error(`Character bible generation failed HTTP ${status}`);
+          const bible=data.bible;
+          if(bible.status!=='proposed'||bible.version!=='character-bible-v1'||bible.mode!=='local-structural-canon') throw new Error('Character bible truth labels are incorrect');
+          if(!bible.identityAnchor||!Array.isArray(bible.continuityRules)||bible.continuityRules.length<3) throw new Error('Character bible continuity invariants are incomplete');
+          console.log(`CHARACTER_BIBLE_PROPOSED_OK character=${bible.characterName} rules=${bible.continuityRules.length}`);
+          NODE
+      - name: Refuse silent regeneration of a validated bible
+        run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const generated=JSON.parse(fs.readFileSync('/tmp/character-bible.json','utf8'));
+          const existingBible={...generated.bible,status:'validated',validatedAt:'2026-09-08T05:00:00.000Z'};
+          fs.writeFileSync('/tmp/locked-bible-request.json',JSON.stringify({characterId:'bec',universeId:'bird',characterName:'Bec',universeName:'Oiseau enquêteur',existingBible}));
+          NODE
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/locked-bible.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-character-bible \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/locked-bible-request.json)
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/locked-bible.json');
+          const status=Number(process.env.STATUS);
+          if(status!==409||data.ok!==false||!/validée/i.test(data.error||'')) throw new Error(`Validated bible was not protected; HTTP ${status}`);
+          console.log('VALIDATED_CHARACTER_BIBLE_PROTECTED');
+          NODE
+      - name: Refuse visual plan without validated character canon
+        run: |
+          cat > /tmp/script.json <<'JSON'
+          {"id":"validated-script-1","status":"validated","title":"Test canon","script":"Un trou noir concentre une masse immense. Sa gravité modifie fortement son environnement. La matière peut chauffer autour de lui. Les astronomes observent cette matière avec plusieurs instruments. Les trous noirs supermassifs occupent le centre de nombreuses galaxies. Leur origine reste une question scientifique active.","sourceFacts":["Un trou noir concentre une masse immense.","Sa gravité modifie fortement son environnement.","La matière peut chauffer autour de lui.","Les astronomes observent cette matière avec plusieurs instruments.","Les trous noirs supermassifs occupent le centre de nombreuses galaxies.","Leur origine reste une question scientifique active."]}
+          JSON
+          node - <<'NODE'
+          const fs=require('fs');
+          const script=JSON.parse(fs.readFileSync('/tmp/script.json','utf8'));
+          fs.writeFileSync('/tmp/plan-no-bible.json',JSON.stringify({universe:'Oiseau enquêteur',character:'Bec',script}));
+          NODE
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/plan-rejected.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-visual-plan \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/plan-no-bible.json)
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/plan-rejected.json');
+          const status=Number(process.env.STATUS);
+          if(status!==409||data.ok!==false||!/bible personnage validée/i.test(data.error||'')) throw new Error(`Visual plan was not blocked without canon; HTTP ${status}`);
+          console.log('VISUAL_PLAN_REQUIRES_VALIDATED_CANON');
+          NODE
+      - name: Generate visual plan bound to the exact validated canon
+        run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const script=JSON.parse(fs.readFileSync('/tmp/script.json','utf8'));
+          const proposed=JSON.parse(fs.readFileSync('/tmp/character-bible.json','utf8')).bible;
+          const characterBible={...proposed,status:'validated',validatedAt:'2026-09-08T05:00:00.000Z'};
+          fs.writeFileSync('/tmp/plan-with-bible.json',JSON.stringify({universe:'Oiseau enquêteur',character:'Bec',characterBible,script}));
+          NODE
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/plan-canonical.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-visual-plan \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/plan-with-bible.json)
+          STATUS="$STATUS" node - <<'NODE'
+          const data=require('/tmp/plan-canonical.json');
+          const status=Number(process.env.STATUS);
+          if(status!==200||!data.ok||!Array.isArray(data.shots)||data.shots.length<3) throw new Error(`Canonical visual plan failed HTTP ${status}`);
+          if(data.model!=='local-visual-plan-v2') throw new Error('Visual planner model was not upgraded to canon-aware v2');
+          if(data.characterBible?.version!=='character-bible-v1'||data.characterBible?.validatedAt!=='2026-09-08T05:00:00.000Z') throw new Error('Exact canonical bible provenance is missing from visual plan');
+          if(!data.characterBible?.identityAnchor) throw new Error('Canonical identity anchor is missing from plan provenance');
+          for(const shot of data.shots){
+            if(!/identité canonique/i.test(shot.continuity||'')) throw new Error('Shot continuity does not reference canonical identity');
+            if(!Array.isArray(shot.continuityRules)||shot.continuityRules.length<3) throw new Error('Shot is missing canonical continuity rules');
+          }
+          console.log(`CANONICAL_VISUAL_PLAN_OK shots=${data.shots.length} canon=${data.characterBible.version}`);
+          NODE
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik-character.log || true
