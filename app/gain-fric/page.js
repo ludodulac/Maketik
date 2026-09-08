@@ -1,7 +1,7 @@
 'use client';
 
 import {useEffect,useState} from 'react';
-import {mergeGeneratedScripts} from '../../lib/script-state.mjs';
+import {mergeGeneratedScripts,scriptFactProvenanceStatus} from '../../lib/script-state.mjs';
 import YouTubeCorpusWorkspace from '../components/YouTubeCorpusWorkspace';
 import TikTokReferenceWorkspace from '../components/TikTokReferenceWorkspace';
 import CharacterBibleWorkspace from '../components/CharacterBibleWorkspace';
@@ -27,7 +27,7 @@ const initialProject=()=>({
 function ScriptFacts({script}){
   const detailed=Array.isArray(script.sourceFactsDetailed)?script.sourceFactsDetailed:[];
   if(detailed.length){
-    return <details><summary>Faits source utilisés · provenance YouTube</summary><ul>{detailed.map((fact,n)=><li key={n}><b>{fact.sourceLabel||'SOURCE YOUTUBE'}</b>{' · '}{fact.text}{fact.sourceUrl&&<><br/><small>{fact.sourceUrl}</small></>}{fact.sourceExcerpt&&<><br/><small>Extrait vérifié : “{fact.sourceExcerpt}”</small></>}{fact.provenanceVerified===false&&<><br/><small className="blockHint">Provenance non vérifiée automatiquement : à contrôler avant validation.</small></>}</li>)}</ul></details>;
+    return <details><summary>Faits source utilisés · provenance YouTube</summary><ul>{detailed.map((fact,n)=><li key={n}><b>{fact.sourceLabel||'SOURCE YOUTUBE'}</b>{' · '}{fact.text}{fact.sourceUrl&&<><br/><small>{fact.sourceUrl}</small></>}{fact.sourceExcerpt&&<><br/><small>Extrait vérifié : “{fact.sourceExcerpt}”</small></>}{fact.provenanceVerified===false&&<><br/><small className="blockHint">Provenance non vérifiée automatiquement : validation bloquée.</small></>}</li>)}</ul></details>;
   }
   if(script.sourceFacts?.length) return <details><summary>Faits source utilisés</summary><ul>{script.sourceFacts.map((fact,n)=><li key={n}>{fact}</li>)}</ul></details>;
   return null;
@@ -62,7 +62,18 @@ export default function GainFricPage(){
       setNotice(data.generationMode==='fallback'?`${data.scripts.length} brouillons extractifs créés depuis ${data.factualSourceCount||1} source(s) factuelle(s), avec provenance par vidéo.`:`${data.scripts.length} scripts originaux proposés depuis ${data.factualSourceCount||1} source(s) factuelle(s), avec provenance par vidéo.`);
     }catch(error){setNotice(error.message)}finally{setGenerating(false)}
   }
-  function setScriptStatus(id,status){updateProject(project.id,{scripts:(project.scripts||[]).map(s=>s.id===id?{...s,status,validatedAt:status==='validated'?new Date().toISOString():s.validatedAt}:s)})}
+  function setScriptStatus(id,status){
+    const target=(project.scripts||[]).find(script=>script.id===id);
+    if(!target)return;
+    if(status==='validated'){
+      const provenance=scriptFactProvenanceStatus(target);
+      if(!provenance.canValidate){
+        setNotice(`Validation bloquée : ${provenance.reason}`);
+        return;
+      }
+    }
+    updateProject(project.id,{scripts:(project.scripts||[]).map(s=>s.id===id?{...s,status,validatedAt:status==='validated'?new Date().toISOString():s.validatedAt}:s)});
+  }
   return <main>
     <header><div className="brand">MAKE<span>TIK</span></div><div className="tag">projet réel · Gain fric</div></header>
     <div className="projectPage">
@@ -76,7 +87,7 @@ export default function GainFricPage(){
       </div>
       {project.inspection?.tiktoks?.some(source=>source?.ok)&&<TikTokReferenceWorkspace project={project} updateProject={updateProject} setNotice={setNotice}/>} 
       <CharacterBibleWorkspace project={project} universeName="Oiseau enquêteur" characterName="Bec" updateProject={updateProject} setNotice={setNotice}/>
-      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=><article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div><ScriptFacts script={s}/><div className="inlineActions">{s.status==='validated'?<button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')}>✓ Valider ce script</button>}</div></article>)}</div>}
+      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=>{const provenance=scriptFactProvenanceStatus(s);return <article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div><ScriptFacts script={s}/><div className="inlineActions">{s.status==='validated'?<button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')} disabled={!provenance.canValidate}>✓ Valider ce script</button>}{!provenance.canValidate&&<small className="blockHint">{provenance.reason}</small>}</div></article>})}</div>}
     </div>
   </main>;
 }
