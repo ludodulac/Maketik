@@ -21,7 +21,7 @@ const youtubes=[
 const uid=()=>globalThis.crypto?.randomUUID?.()||String(Date.now()+Math.random());
 const initialProject=()=>({
   id:'gain-fric-v1',name:'Gain fric',universe:'bird',character:'bec',tiktoks,youtubes,youtube:youtubes[0],
-  status:'sources_ready',inspection:null,youtubeCorpus:null,transcript:null,tiktokEvidence:{},scripts:[],editorialProfile:null,lastGeneration:null,characterBible:null
+  status:'sources_ready',inspection:null,youtubeCorpus:null,transcript:null,tiktokEvidence:{},scripts:[],editorialProfile:null,lastGeneration:null,characterBible:null,audioExports:[]
 });
 
 function ScriptFacts({script}){
@@ -33,11 +33,17 @@ function ScriptFacts({script}){
   return null;
 }
 
+function filenameFromDisposition(value,fallback){
+  const match=String(value||'').match(/filename="?([^";]+)"?/i);
+  return match?.[1]||fallback;
+}
+
 export default function GainFricPage(){
   const [project,setProject]=useState(initialProject());
   const [notice,setNotice]=useState('');
   const [inspecting,setInspecting]=useState(false);
   const [generating,setGenerating]=useState(false);
+  const [audioBusyId,setAudioBusyId]=useState(null);
   useEffect(()=>{try{const saved=localStorage.getItem('maketik-gain-fric-project');if(saved)setProject({...initialProject(),...JSON.parse(saved)})}catch{}},[]);
   useEffect(()=>{try{localStorage.setItem('maketik-gain-fric-project',JSON.stringify(project))}catch{}},[project]);
   const updateProject=(id,patch)=>setProject(current=>current.id===id?{...current,...patch,updatedAt:new Date().toISOString()}:current);
@@ -74,6 +80,22 @@ export default function GainFricPage(){
     }
     updateProject(project.id,{scripts:(project.scripts||[]).map(s=>s.id===id?{...s,status,validatedAt:status==='validated'?new Date().toISOString():s.validatedAt}:s)});
   }
+  async function exportAudio(script){
+    if(script.status!=='validated'||audioBusyId)return;
+    setAudioBusyId(script.id);setNotice('');
+    try{
+      const r=await fetch('/api/export-script-audio',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectName:project.name,script})});
+      if(!r.ok){const data=await r.json().catch(()=>({}));throw new Error(data.error||'Narration indisponible');}
+      const blob=await r.blob();
+      if(blob.type!=='audio/mpeg'||blob.size<1000)throw new Error('Le fournisseur n’a pas renvoyé un MP3 valide.');
+      const filename=filenameFromDisposition(r.headers.get('content-disposition'),`maketik-gain-fric-${script.id}.mp3`);
+      const href=URL.createObjectURL(blob);
+      const a=document.createElement('a');a.href=href;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(href),1000);
+      const record={scriptId:script.id,filename,bytes:blob.size,provider:r.headers.get('x-maketik-audio-provider')||'unknown',voice:r.headers.get('x-maketik-audio-voice')||null,stability:r.headers.get('x-maketik-audio-stability')||null,exportedAt:new Date().toISOString()};
+      updateProject(project.id,{audioExports:[...(project.audioExports||[]).filter(item=>item.scriptId!==script.id),record]});
+      setNotice(`Narration MP3 créée · ${Math.round(blob.size/1024)} Ko · ${record.voice||record.provider}.`);
+    }catch(error){setNotice(`${error.message}. Le script validé reste intact.`)}finally{setAudioBusyId(null)}
+  }
   return <main>
     <header><div className="brand">MAKE<span>TIK</span></div><div className="tag">projet réel · Gain fric</div></header>
     <div className="projectPage">
@@ -81,13 +103,13 @@ export default function GainFricPage(){
       {notice&&<div className="notice">{notice}</div>}
       <div className="workspace">
         <div className="panel"><h2>1. Sources réelles</h2><p>La reconnaissance des liens reste séparée de la transcription.</p><button className="primary" onClick={inspectSources} disabled={inspecting}>{inspecting?'Vérification…':'Vérifier les 8 sources'}</button>{project.inspection&&<div className="pipeline"><b>{project.inspection.tiktoks.filter(x=>x.ok).length + project.inspection.youtubes.filter(x=>x.ok).length}</b><span>sources reconnues</span><em>/ 8</em></div>}</div>
-        <div className="panel"><h2>Règle de vérité</h2><p>TikTok = structure et rythme seulement. YouTube = matière factuelle seulement. Une vidéo non transcrite ne fournit aucun fait.</p></div>
+        <div className="panel"><h2>Règle de vérité</h2><p>TikTok = structure et rythme seulement. YouTube = matière factuelle seulement. Une extraction de sous-titres indisponible depuis Maketik ne signifie pas que la vidéo n’en possède pas.</p></div>
         <YouTubeCorpusWorkspace project={project} updateProject={updateProject} setNotice={setNotice}/>
         <div className="panel"><h2>3. Scripts</h2><p>La génération reste bloquée tant qu'aucune source YouTube n'est réellement prête. Chaque fait généré garde ensuite la vidéo YouTube dont il provient.</p><button className="primary" onClick={generateScripts} disabled={generating||!project.transcript?.text}>{generating?'Génération…':'Générer depuis le corpus'}</button>{!project.transcript?.text&&<small className="blockHint">Corpus factuel vide : aucune invention autorisée.</small>}{project.lastGeneration?.generationMode==='fallback'&&<small className="blockHint">Mode local : brouillons extractifs, pas scripts originaux IA.</small>}</div>
       </div>
       {project.inspection?.tiktoks?.some(source=>source?.ok)&&<TikTokReferenceWorkspace project={project} updateProject={updateProject} setNotice={setNotice}/>} 
       <CharacterBibleWorkspace project={project} universeName="Oiseau enquêteur" characterName="Bec" updateProject={updateProject} setNotice={setNotice}/>
-      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=>{const provenance=scriptFactProvenanceStatus(s);return <article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div><ScriptFacts script={s}/><div className="inlineActions">{s.status==='validated'?<button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')} disabled={!provenance.canValidate}>✓ Valider ce script</button>}{!provenance.canValidate&&<small className="blockHint">{provenance.reason}</small>}</div></article>})}</div>}
+      {(project.scripts||[]).length>0&&<div className="scriptsArea"><div className="sectionTitle"><div><p className="kicker">SCRIPTS GAIN FRIC</p><h2>Propositions à valider</h2></div><span>{project.scripts.filter(s=>s.status==='validated').length} validé(s)</span></div>{project.scripts.map((s,i)=>{const provenance=scriptFactProvenanceStatus(s);const audio=(project.audioExports||[]).find(item=>item.scriptId===s.id);return <article className={'scriptCard '+(s.status==='validated'?'validated':'')} key={s.id}><div className="scriptHead"><div><span className="scriptNo">#{String(i+1).padStart(2,'0')}</span><h3>{s.title}</h3><p>{s.angle}</p></div><span className="chip">≈ {s.estimatedSeconds}s</span></div><blockquote>{s.hook}</blockquote><div className="scriptText">{s.script}</div><ScriptFacts script={s}/><div className="inlineActions">{s.status==='validated'?<><button onClick={()=>setScriptStatus(s.id,'proposed')}>Retirer la validation</button><button className="primary" onClick={()=>exportAudio(s)} disabled={audioBusyId===s.id}>{audioBusyId===s.id?'Narration…':'↓ Générer la narration MP3'}</button></>:<button className="primary" onClick={()=>setScriptStatus(s.id,'validated')} disabled={!provenance.canValidate}>✓ Valider ce script</button>}{!provenance.canValidate&&<small className="blockHint">{provenance.reason}</small>}{audio&&<small>Dernier MP3 : {Math.round(audio.bytes/1024)} Ko · {audio.voice||audio.provider} · fournisseur {audio.stability||'non précisé'}</small>}</div></article>})}</div>}
     </div>
   </main>;
 }
