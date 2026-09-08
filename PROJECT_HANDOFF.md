@@ -465,3 +465,45 @@ La priorité suivante redevient visuelle, mais **pas encore la génération d’
 5. ne générer aucune image finale tant que cette garantie de continuité n’est pas en place et testée.
 
 Une fois la bible canonique fermée et testée, réévaluer explicitement dans ce handoff avant de reprendre un moteur d’illustrations ou un export PNG.
+
+## 20. BIBLE CANONIQUE FERMÉE — priorité au premier artefact visuel canonique
+
+> Cette section supersède la section 19 pour la priorité active.
+
+### Tranche canonique réellement fermée
+
+La bible personnage canonique est maintenant codée, intégrée et vérifiée :
+- `lib/character-bible.mjs` produit une bible structurelle locale `character-bible-v1` avec ancre d’identité, silhouette, visage, proportions, vêtements, accessoires, expressions, règle d’univers, palette et règles de continuité ;
+- `app/api/generate-character-bible/route.js` produit seulement une proposition et refuse en HTTP `409` toute régénération silencieuse si la bible courante est déjà `validated` ;
+- `app/components/CharacterBibleWorkspace.js` permet d’éditer la proposition, puis de la valider/verrouiller explicitement ; une bible validée est en lecture seule jusqu’au retrait explicite de sa validation ;
+- `app/page.js` persiste `characterBible` au niveau projet, affiche son état dans le pipeline et bloque la création d’un nouveau plan visuel tant que la bible n’est pas validée ;
+- les anciens plans sans métadonnée de bible restent conservés mais sont explicitement présentés comme historiques pré-canon ;
+- `app/api/generate-visual-plan/route.js` exige désormais une bible `validated` pour tout nouveau plan ;
+- `lib/visual-plan.mjs` est passé à `local-visual-plan-v2` et injecte l’ancre/règles canoniques dans la continuité de chaque plan ;
+- chaque nouveau plan enregistre la provenance exacte `characterBible.version + characterId + validatedAt + identityAnchor`.
+
+Le workflow `.github/workflows/character-bible.yml` a passé sur le head `7e30fe21a0b3cd05dbe424180597a97b2c6b3182` avec les marqueurs :
+- `CHARACTER_BIBLE_PROPOSED_OK character=Bec rules=4` ;
+- `VALIDATED_CHARACTER_BIBLE_PROTECTED` ;
+- `VISUAL_PLAN_REQUIRES_VALIDATED_CANON` ;
+- `CANONICAL_VISUAL_PLAN_OK shots=6 canon=character-bible-v1`.
+
+Le CI principal et l’export PDF sont également verts sur ce même head. La bible est donc **faite, testée et vérifiée** comme contrat structurel de continuité.
+
+### Limite à ne pas masquer
+
+La bible est encore **textuelle**. Elle n’est pas une character sheet dessinée et ne prouve pas encore qu’un moteur d’images maintient réellement le même personnage entre plusieurs générations. Aucun artefact image final n’est donc déclaré acquis à ce stade.
+
+### Nouvelle priorité active
+
+La prochaine tranche autorisée est un **premier artefact visuel canonique exportable du personnage**, avant toute série d’illustrations de plans. L’objectif est de donner à la bible validée une représentation visuelle concrète et stable qui pourra ensuite servir d’ancrage aux futurs fournisseurs d’images.
+
+Ordre autoritaire :
+1. produire d’abord une character sheet locale/vectorielle déterministe liée à une bible `validated` ;
+2. enregistrer la version exacte de la bible et le provider/mode de rendu dans l’artefact ;
+3. refuser l’export si la bible n’est pas validée ;
+4. tester un vrai fichier image/vectoriel exportable et sa non-régression ;
+5. étiqueter honnêtement ce rendu comme `local-vector-sheet`, pas comme image IA ni design final ;
+6. seulement après ce palier, réévaluer explicitement ici l’intégration d’un fournisseur d’illustration générative pour les plans.
+
+Ne pas réintroduire un moteur d’images externe ni `sharp` avant que ce premier artefact canonique déterministe soit réellement fermé et testé.
