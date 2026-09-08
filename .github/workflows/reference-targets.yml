@@ -1,0 +1,97 @@
+name: Verify Maketik reference targets
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/reference-targets.mjs'
+      - 'app/api/generate-reference-targets/**'
+      - '.github/workflows/reference-targets.yml'
+
+jobs:
+  reference-targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Start production server
+        run: |
+          npm start > /tmp/maketik-reference.log 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:3000/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/maketik-reference.log
+          exit 1
+      - name: Reject targets without a validated visual plan
+        run: |
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/reference-rejected.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-reference-targets \
+            -H 'content-type: application/json' \
+            --data '{"visualPlan":{"status":"proposed","shots":[]}}')
+          test "$STATUS" = "409"
+          node -e "const d=require('/tmp/reference-rejected.json'); if(d.ok!==false||!d.error) throw new Error('Unvalidated plan rejection is not explicit'); console.log('UNVALIDATED_REFERENCE_TARGETS_REJECTED')"
+      - name: Reject targets from a stale visual plan
+        run: |
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/reference-stale.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-reference-targets \
+            -H 'content-type: application/json' \
+            --data '{"visualPlan":{"status":"validated","stale":true,"shots":[{"order":1}]}}')
+          test "$STATUS" = "409"
+          node -e "const d=require('/tmp/reference-stale.json'); if(d.ok!==false||!d.error) throw new Error('Stale plan rejection is not explicit'); console.log('STALE_REFERENCE_TARGETS_REJECTED')"
+      - name: Generate research targets without pretending references were found
+        run: |
+          cat > /tmp/reference-request.json <<'JSON'
+          {
+            "sourceTitle":"What is a Black Hole? We Asked a NASA Expert",
+            "sourceUrl":"https://www.youtube.com/watch?v=EJXTZ5jpSmk",
+            "visualPlan":{
+              "status":"validated",
+              "stale":false,
+              "generatedAt":"2026-09-08T00:00:00.000Z",
+              "shots":[
+                {"order":1,"purpose":"ouverture","narrationExcerpt":"Imagine une région si dense que même la lumière ne peut plus s'en échapper.","documentaryReference":"Un trou noir peut être si dense que même la lumière ne peut pas s'en échapper."},
+                {"order":2,"purpose":"mise-en-contexte","narrationExcerpt":"Certains trous noirs apparaissent après l'effondrement d'étoiles massives.","documentaryReference":"Certains trous noirs de masse stellaire se forment après l'effondrement d'étoiles massives."},
+                {"order":3,"purpose":"fait-cle","narrationExcerpt":"D'autres sont supermassifs et occupent le centre de nombreuses galaxies.","documentaryReference":"Les trous noirs supermassifs se trouvent au centre de nombreuses galaxies."},
+                {"order":4,"purpose":"conclusion","narrationExcerpt":"Leur formation reste encore une question scientifique importante.","documentaryReference":"La formation précise des trous noirs supermassifs reste une question scientifique importante."}
+              ]
+            }
+          }
+          JSON
+          STATUS=$(curl --silent --show-error --max-time 10 \
+            -o /tmp/reference-targets.json \
+            -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/api/generate-reference-targets \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/reference-request.json)
+          test "$STATUS" = "200"
+          node - <<'NODE'
+          const data=require('/tmp/reference-targets.json');
+          if(!data.ok||data.mode!=='research-targets-only'||data.provider!=='local-reference-target-planner') throw new Error('Reference-target truth metadata is missing');
+          if(!Array.isArray(data.targets)||data.targets.length!==4) throw new Error('Expected one research target per visual shot');
+          for(const [index,target] of data.targets.entries()){
+            if(target.shotOrder!==index+1||!target.searchQuery||!target.sourceFact||!target.researchIntent) throw new Error('Reference target is incomplete');
+            if(target.status!=='needs-research') throw new Error('Target must not pretend research has happened');
+            if(!Array.isArray(target.acceptanceCriteria)||target.acceptanceCriteria.length<4) throw new Error('Verification criteria are missing');
+            if(target.sourceContext?.url!=='https://www.youtube.com/watch?v=EJXTZ5jpSmk') throw new Error('Source context provenance was lost');
+          }
+          if(!data.limitations||!/pas des références trouvées/i.test(data.limitations)) throw new Error('Limitations must say research has not happened');
+          console.log(`REFERENCE_TARGETS_OK count=${data.targets.length} mode=${data.mode}`);
+          NODE
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/maketik-reference.log || true
