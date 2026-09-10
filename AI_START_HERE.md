@@ -2,7 +2,7 @@
 
 ## Contexte transversal
 
-Maketik appartient à l'écosystème **`ludodulac/Grand-p-re-`**. Le slug GitHub de Grand Père utilise des tirets à la place des caractères accentués. En nouvelle conversation : lire Grand Père `AI_START_HERE.md`, la fiche Maketik via `projects/_INDEX.md` et `LOOP_ENGINEERING.md`, puis revenir ici. Le dépôt Maketik reste la source de vérité de son état et de ses artefacts.
+Maketik appartient à l'écosystème **`ludodulac/Grand-pere`**. Grand Père est documenté dans le dépôt `ludodulac/Grand-pere`. En nouvelle conversation : lire Grand Père `AI_START_HERE.md`, la fiche Maketik via `projects/_INDEX.md` et `LOOP_ENGINEERING.md`, puis revenir ici. Le dépôt Maketik reste la source de vérité de son état et de ses artefacts.
 
 1. Lire `PROJECT_PRINCIPLES.md` et `PROJECT_MAP.md`.
 2. Vérifier `main`, comportement réel, commits/PR/CI pertinents.
